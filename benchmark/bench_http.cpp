@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -22,6 +22,7 @@
 namespace td {
 
 std::atomic<int> counter;
+
 class HttpClient : public HttpOutboundConnection::Callback {
   void start_up() override {
     IPAddress addr;
@@ -48,7 +49,7 @@ class HttpClient : public HttpOutboundConnection::Callback {
     send_closure(connection_, &HttpOutboundConnection::write_ok);
     LOG(INFO) << "SEND";
   }
-  void handle(HttpQueryPtr result) override {
+  void handle(unique_ptr<HttpQuery> result) override {
     loop();
   }
   void on_connection_error(Status error) override {

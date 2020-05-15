@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -79,6 +79,7 @@ struct FileStats {
 
   std::vector<FullFileInfo> all_files;
 
+  void add_copy(const FullFileInfo &info);
   void add(FullFileInfo &&info);
   void apply_dialog_limit(int32 limit);
 
@@ -87,6 +88,7 @@ struct FileStats {
   FileTypeStat get_total_nontemp_stat() const;
 
  private:
+  void add_impl(const FullFileInfo &info);
   void add(StatByType &by_type, FileType file_type, int64 size);
 };
 

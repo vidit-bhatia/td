@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -31,14 +31,25 @@ void FileStats::add(StatByType &by_type, FileType file_type, int64 size) {
   by_type[pos].cnt++;
 }
 
-void FileStats::add(FullFileInfo &&info) {
+void FileStats::add_impl(const FullFileInfo &info) {
   if (split_by_owner_dialog_id) {
     add(stat_by_owner_dialog_id[info.owner_dialog_id], info.file_type, info.size);
   } else {
     add(stat_by_type, info.file_type, info.size);
   }
+}
+
+void FileStats::add_copy(const FullFileInfo &info) {
+  add_impl(info);
   if (need_all_files) {
-    all_files.emplace_back(std::move(info));
+    all_files.push_back(info);
+  }
+}
+
+void FileStats::add(FullFileInfo &&info) {
+  add_impl(info);
+  if (need_all_files) {
+    all_files.push_back(std::move(info));
   }
 }
 
@@ -52,6 +63,7 @@ FileTypeStat get_nontemp_stat(const FileStats::StatByType &by_type) {
   }
   return stat;
 }
+
 FileTypeStat FileStats::get_total_nontemp_stat() const {
   if (!split_by_owner_dialog_id) {
     return get_nontemp_stat(stat_by_type);
@@ -64,6 +76,7 @@ FileTypeStat FileStats::get_total_nontemp_stat() const {
   }
   return stat;
 }
+
 void FileStats::apply_dialog_limit(int32 limit) {
   if (limit == -1) {
     return;
@@ -123,6 +136,8 @@ tl_object_ptr<td_api::storageStatisticsByChat> as_td_api(DialogId dialog_id,
   auto stats = make_tl_object<td_api::storageStatisticsByChat>(dialog_id.get(), 0, 0, Auto());
   int64 secure_raw_size = 0;
   int32 secure_raw_cnt = 0;
+  int64 wallpaper_raw_size = 0;
+  int32 wallpaper_raw_cnt = 0;
   for (int32 i = 0; i < file_type_size; i++) {
     FileType file_type = static_cast<FileType>(i);
     auto size = stat_by_type[i].size;
@@ -133,9 +148,18 @@ tl_object_ptr<td_api::storageStatisticsByChat> as_td_api(DialogId dialog_id,
       secure_raw_cnt = cnt;
       continue;
     }
+    if (file_type == FileType::Wallpaper) {
+      wallpaper_raw_size = size;
+      wallpaper_raw_cnt = cnt;
+      continue;
+    }
     if (file_type == FileType::Secure) {
       size += secure_raw_size;
       cnt += secure_raw_cnt;
+    }
+    if (file_type == FileType::Background) {
+      size += wallpaper_raw_size;
+      cnt += wallpaper_raw_cnt;
     }
     if (size == 0) {
       continue;
@@ -233,4 +257,5 @@ StringBuilder &operator<<(StringBuilder &sb, const FileStats &file_stats) {
 
   return sb;
 }
+
 }  // namespace td

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -13,7 +13,6 @@
 #include "td/utils/Slice.h"
 #include "td/utils/utf8.h"
 
-#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -48,8 +47,23 @@ string clean_name(string str, size_t max_length) {
 }
 
 string clean_username(string str) {
-  str.resize(std::remove(str.begin(), str.end(), '.') - str.begin());
-  return trim(to_lower(str));
+  td::remove(str, '.');
+  to_lower_inplace(str);
+  return trim(str);
+}
+
+void replace_offending_characters(string &str) {
+  // "(\xe2\x80\x8f|\xe2\x80\x8e){N}(\xe2\x80\x8f|\xe2\x80\x8e)" -> "(\xe2\x80\x8c){N}$2"
+  auto s = MutableSlice(str).ubegin();
+  for (size_t pos = 0; pos < str.size(); pos++) {
+    if (s[pos] == 0xe2 && s[pos + 1] == 0x80 && (s[pos + 2] == 0x8e || s[pos + 2] == 0x8f)) {
+      while (s[pos + 3] == 0xe2 && s[pos + 4] == 0x80 && (s[pos + 5] == 0x8e || s[pos + 5] == 0x8f)) {
+        s[pos + 2] = static_cast<unsigned char>(0x8c);
+        pos += 3;
+      }
+      pos += 2;
+    }
+  }
 }
 
 bool clean_input_string(string &str) {
@@ -133,14 +147,17 @@ bool clean_input_string(string &str) {
   }
 
   str.resize(new_size);
+
+  replace_offending_characters(str);
+
   return true;
 }
 
-string strip_empty_characters(string str, size_t max_length) {
+string strip_empty_characters(string str, size_t max_length, bool strip_rtlo) {
   static const char *space_characters[] = {u8"\u1680", u8"\u180E", u8"\u2000", u8"\u2001", u8"\u2002",
                                            u8"\u2003", u8"\u2004", u8"\u2005", u8"\u2006", u8"\u2007",
-                                           u8"\u2008", u8"\u2009", u8"\u200A", u8"\u200B", u8"\u202F",
-                                           u8"\u205F", u8"\u3000", u8"\uFEFF", u8"\uFFFC"};
+                                           u8"\u2008", u8"\u2009", u8"\u200A", u8"\u202E", u8"\u202F",
+                                           u8"\u205F", u8"\u2800", u8"\u3000", u8"\uFFFC"};
   static bool can_be_first[std::numeric_limits<unsigned char>::max() + 1];
   static bool can_be_first_inited = [&] {
     for (auto space_ch : space_characters) {
@@ -162,7 +179,10 @@ string strip_empty_characters(string str, size_t max_length) {
       bool found = false;
       for (auto space_ch : space_characters) {
         if (space_ch[0] == str[i] && space_ch[1] == str[i + 1] && space_ch[2] == str[i + 2]) {
-          found = true;
+          if (static_cast<unsigned char>(str[i + 2]) != 0xAE || static_cast<unsigned char>(str[i + 1]) != 0x80 ||
+              static_cast<unsigned char>(str[i]) != 0xE2 || strip_rtlo) {
+            found = true;
+          }
           break;
         }
       }
@@ -177,9 +197,13 @@ string strip_empty_characters(string str, size_t max_length) {
   Slice trimmed = trim(utf8_truncate(trim(Slice(str.c_str(), new_len)), max_length));
 
   // check if there is some non-empty character, empty characters:
+  // "\xE2\x80\x8B", ZERO WIDTH SPACE
   // "\xE2\x80\x8C", ZERO WIDTH NON-JOINER
   // "\xE2\x80\x8D", ZERO WIDTH JOINER
+  // "\xE2\x80\x8E", LEFT-TO-RIGHT MARK
+  // "\xE2\x80\x8F", RIGHT-TO-LEFT MARK
   // "\xE2\x80\xAE", RIGHT-TO-LEFT OVERRIDE
+  // "\xEF\xBB\xBF", ZERO WIDTH NO-BREAK SPACE aka BYTE ORDER MARK
   // "\xC2\xA0", NO-BREAK SPACE
   for (i = 0;;) {
     if (i == trimmed.size()) {
@@ -191,9 +215,15 @@ string strip_empty_characters(string str, size_t max_length) {
       i++;
       continue;
     }
-    if (static_cast<unsigned char>(trimmed[i]) == 0xE2 && static_cast<unsigned char>(trimmed[i + 1]) == 0x80 &&
-        (static_cast<unsigned char>(trimmed[i + 2]) == 0x8C || static_cast<unsigned char>(trimmed[i + 2]) == 0x8D ||
-         static_cast<unsigned char>(trimmed[i + 2]) == 0xAE)) {
+    if (static_cast<unsigned char>(trimmed[i]) == 0xE2 && static_cast<unsigned char>(trimmed[i + 1]) == 0x80) {
+      auto next = static_cast<unsigned char>(trimmed[i + 2]);
+      if ((0x8B <= next && next <= 0x8F) || next == 0xAE) {
+        i += 3;
+        continue;
+      }
+    }
+    if (static_cast<unsigned char>(trimmed[i]) == 0xEF && static_cast<unsigned char>(trimmed[i + 1]) == 0xBB &&
+        static_cast<unsigned char>(trimmed[i + 2]) == 0xBF) {
       i += 3;
       continue;
     }
@@ -275,22 +305,36 @@ string get_emoji_fingerprint(uint64 num) {
   return emojis[static_cast<size_t>((num & 0x7FFFFFFFFFFFFFFF) % emojis.size())].str();
 }
 
-Result<string> check_url(MutableSlice url) {
+static bool tolower_begins_with(Slice str, Slice prefix) {
+  if (prefix.size() > str.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < prefix.size(); i++) {
+    if (to_lower(str[i]) != prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Result<string> check_url(Slice url) {
   bool is_tg = false;
-  if (begins_with(url, "tg://")) {
-    url.remove_prefix(5);
-    is_tg = true;
-  } else if (begins_with(url, "tg:")) {
+  bool is_ton = false;
+  if (tolower_begins_with(url, "tg:")) {
     url.remove_prefix(3);
     is_tg = true;
-  } else {
-    is_tg = false;
+  } else if (tolower_begins_with(url, "ton:")) {
+    url.remove_prefix(4);
+    is_ton = true;
+  }
+  if ((is_tg || is_ton) && begins_with(url, "//")) {
+    url.remove_prefix(2);
   }
   TRY_RESULT(http_url, parse_url(url));
-  if (is_tg) {
-    if (begins_with(url, "http://") || http_url.protocol_ == HttpUrl::Protocol::HTTPS || !http_url.userinfo_.empty() ||
-        http_url.specified_port_ != 0 || http_url.is_ipv6_) {
-      return Status::Error("Wrong tg URL");
+  if (is_tg || is_ton) {
+    if (tolower_begins_with(url, "http://") || http_url.protocol_ == HttpUrl::Protocol::HTTPS ||
+        !http_url.userinfo_.empty() || http_url.specified_port_ != 0 || http_url.is_ipv6_) {
+      return Status::Error(is_tg ? Slice("Wrong tg URL") : Slice("Wrong ton URL"));
     }
 
     Slice query(http_url.query_);
@@ -298,10 +342,10 @@ Result<string> check_url(MutableSlice url) {
     if (query[1] == '?') {
       query.remove_prefix(1);
     }
-    return PSTRING() << "tg://" << http_url.host_ << query;
+    return PSTRING() << (is_tg ? "tg" : "ton") << "://" << http_url.host_ << query;
   }
 
-  if (url.find('.') == string::npos) {
+  if (http_url.host_.find('.') == string::npos) {
     return Status::Error("Wrong HTTP URL");
   }
   return http_url.get_url();

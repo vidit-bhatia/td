@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,6 +17,8 @@
 
 namespace td {
 
+class Td;
+
 struct Dependencies {
   std::unordered_set<UserId, UserIdHash> user_ids;
   std::unordered_set<ChatId, ChatIdHash> chat_ids;
@@ -25,5 +27,7 @@ struct Dependencies {
   std::unordered_set<DialogId, DialogIdHash> dialog_ids;
   std::unordered_set<WebPageId, WebPageIdHash> web_page_ids;
 };
+
+void resolve_dependencies_force(Td *td, const Dependencies &dependencies);
 
 }  // namespace td

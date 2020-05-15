@@ -1,11 +1,12 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/net/SslStream.h"
 
+#if !TD_EMSCRIPTEN
 #include "td/utils/common.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
@@ -223,7 +224,9 @@ class SslStreamImpl {
     if (ssl_ctx == nullptr) {
       return create_openssl_error(-7, "Failed to create an SSL context");
     }
-    auto ssl_ctx_guard = ScopeExit() + [&]() { SSL_CTX_free(ssl_ctx); };
+    auto ssl_ctx_guard = ScopeExit() + [&] {
+      SSL_CTX_free(ssl_ctx);
+    };
     long options = 0;
 #ifdef SSL_OP_NO_SSLv2
     options |= SSL_OP_NO_SSLv2;
@@ -310,7 +313,7 @@ class SslStreamImpl {
     if (ssl_handle == nullptr) {
       return create_openssl_error(-13, "Failed to create an SSL handle");
     }
-    auto ssl_handle_guard = ScopeExit() + [&]() {
+    auto ssl_handle_guard = ScopeExit() + [&] {
       do_ssl_shutdown(ssl_handle);
       SSL_free(ssl_handle);
     };
@@ -541,3 +544,43 @@ size_t SslStream::flow_write(Slice slice) {
 }
 
 }  // namespace td
+
+#else
+
+namespace td {
+
+namespace detail {
+class SslStreamImpl {};
+}  // namespace detail
+
+SslStream::SslStream() = default;
+SslStream::SslStream(SslStream &&) = default;
+SslStream &SslStream::operator=(SslStream &&) = default;
+SslStream::~SslStream() = default;
+
+Result<SslStream> SslStream::create(CSlice host, CSlice cert_file, VerifyPeer verify_peer) {
+  return Status::Error("Not supported in emscripten");
+}
+
+SslStream::SslStream(unique_ptr<detail::SslStreamImpl> impl) : impl_(std::move(impl)) {
+}
+
+ByteFlowInterface &SslStream::read_byte_flow() {
+  UNREACHABLE();
+}
+
+ByteFlowInterface &SslStream::write_byte_flow() {
+  UNREACHABLE();
+}
+
+size_t SslStream::flow_read(MutableSlice slice) {
+  UNREACHABLE();
+}
+
+size_t SslStream::flow_write(Slice slice) {
+  UNREACHABLE();
+}
+
+}  // namespace td
+
+#endif

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,6 +7,7 @@
 #include "td/db/binlog/BinlogHelper.h"
 #include "td/db/binlog/ConcurrentBinlog.h"
 #include "td/db/BinlogKeyValue.h"
+#include "td/db/DbKey.h"
 #include "td/db/SeqKeyValue.h"
 #include "td/db/SqliteConnectionSafe.h"
 #include "td/db/SqliteDb.h"
@@ -47,11 +48,17 @@ TEST(DB, binlog_encryption_bug) {
   auto empty = DbKey::empty();
   {
     Binlog binlog;
-    binlog.init(binlog_name.str(), [&](const BinlogEvent &x) {}, cucumber).ensure();
+    binlog
+        .init(
+            binlog_name.str(), [&](const BinlogEvent &x) {}, cucumber)
+        .ensure();
   }
   {
     Binlog binlog;
-    binlog.init(binlog_name.str(), [&](const BinlogEvent &x) {}, cucumber).ensure();
+    binlog
+        .init(
+            binlog_name.str(), [&](const BinlogEvent &x) {}, cucumber)
+        .ensure();
   }
 }
 
@@ -92,7 +99,10 @@ TEST(DB, binlog_encryption) {
     std::vector<string> v;
     LOG(INFO) << "RESTART";
     Binlog binlog;
-    binlog.init(binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, hello).ensure();
+    binlog
+        .init(
+            binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, hello)
+        .ensure();
     CHECK(v == std::vector<string>({"AAAA", "BBBB", long_data, "CCCC"}));
   }
 
@@ -102,7 +112,8 @@ TEST(DB, binlog_encryption) {
     std::vector<string> v;
     LOG(INFO) << "RESTART";
     Binlog binlog;
-    auto status = binlog.init(binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, cucumber);
+    auto status = binlog.init(
+        binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, cucumber);
     CHECK(status.is_error());
   }
 
@@ -112,8 +123,8 @@ TEST(DB, binlog_encryption) {
     std::vector<string> v;
     LOG(INFO) << "RESTART";
     Binlog binlog;
-    auto status =
-        binlog.init(binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, cucumber, hello);
+    auto status = binlog.init(
+        binlog_name.str(), [&](const BinlogEvent &x) { v.push_back(x.data_.str()); }, cucumber, hello);
     CHECK(v == std::vector<string>({"AAAA", "BBBB", long_data, "CCCC"}));
   }
 };
@@ -366,7 +377,7 @@ TEST(DB, thread_key_value) {
   std::vector<thread> threads(threads_n);
   std::vector<std::vector<DbQuery>> res(threads_n);
   for (int i = 0; i < threads_n; i++) {
-    threads[i] = thread([&ts_kv, &queries, &res, i]() {
+    threads[i] = thread([&ts_kv, &queries, &res, i] {
       for (auto q : queries[i]) {
         ts_kv.do_query(q);
         res[i].push_back(q);

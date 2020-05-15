@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -190,7 +190,7 @@ inline void Scheduler::before_tail_send(const ActorId<> &actor_id) {
 }
 
 inline void Scheduler::inc_wait_generation() {
-  wait_generation_++;
+  wait_generation_ += 2;
 }
 
 template <ActorSendType send_type, class RunFuncT, class EventFuncT>
@@ -229,37 +229,40 @@ void Scheduler::send_impl(const ActorId<> &actor_id, const RunFuncT &run_func, c
 
 template <ActorSendType send_type, class EventT>
 void Scheduler::send_lambda(ActorRef actor_ref, EventT &&lambda) {
-  return send_impl<send_type>(actor_ref.get(),
-                              [&](ActorInfo *actor_info) {
-                                event_context_ptr_->link_token = actor_ref.token();
-                                lambda();
-                              },
-                              [&]() {
-                                auto event = Event::lambda(std::forward<EventT>(lambda));
-                                event.set_link_token(actor_ref.token());
-                                return event;
-                              });
+  return send_impl<send_type>(
+      actor_ref.get(),
+      [&](ActorInfo *actor_info) {
+        event_context_ptr_->link_token = actor_ref.token();
+        lambda();
+      },
+      [&] {
+        auto event = Event::lambda(std::forward<EventT>(lambda));
+        event.set_link_token(actor_ref.token());
+        return event;
+      });
 }
 
 template <ActorSendType send_type, class EventT>
 void Scheduler::send_closure(ActorRef actor_ref, EventT &&closure) {
-  return send_impl<send_type>(actor_ref.get(),
-                              [&](ActorInfo *actor_info) {
-                                event_context_ptr_->link_token = actor_ref.token();
-                                closure.run(static_cast<typename EventT::ActorType *>(actor_info->get_actor_unsafe()));
-                              },
-                              [&]() {
-                                auto event = Event::immediate_closure(std::forward<EventT>(closure));
-                                event.set_link_token(actor_ref.token());
-                                return event;
-                              });
+  return send_impl<send_type>(
+      actor_ref.get(),
+      [&](ActorInfo *actor_info) {
+        event_context_ptr_->link_token = actor_ref.token();
+        closure.run(static_cast<typename EventT::ActorType *>(actor_info->get_actor_unsafe()));
+      },
+      [&] {
+        auto event = Event::immediate_closure(std::forward<EventT>(closure));
+        event.set_link_token(actor_ref.token());
+        return event;
+      });
 }
 
 template <ActorSendType send_type>
 void Scheduler::send(ActorRef actor_ref, Event &&event) {
   event.set_link_token(actor_ref.token());
-  return send_impl<send_type>(actor_ref.get(), [&](ActorInfo *actor_info) { do_event(actor_info, std::move(event)); },
-                              [&]() { return std::move(event); });
+  return send_impl<send_type>(
+      actor_ref.get(), [&](ActorInfo *actor_info) { do_event(actor_info, std::move(event)); },
+      [&] { return std::move(event); });
 }
 
 inline void Scheduler::subscribe(PollableFd fd, PollFlags flags) {

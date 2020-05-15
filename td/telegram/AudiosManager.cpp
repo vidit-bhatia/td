@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -36,13 +36,15 @@ tl_object_ptr<td_api::audio> AudiosManager::get_audio_object(FileId file_id) {
   auto &audio = audios_[file_id];
   CHECK(audio != nullptr);
   audio->is_changed = false;
-  return make_tl_object<td_api::audio>(
-      audio->duration, audio->title, audio->performer, audio->file_name, audio->mime_type,
-      get_photo_size_object(td_->file_manager_.get(), &audio->thumbnail), td_->file_manager_->get_file_object(file_id));
+  return make_tl_object<td_api::audio>(audio->duration, audio->title, audio->performer, audio->file_name,
+                                       audio->mime_type, get_minithumbnail_object(audio->minithumbnail),
+                                       get_photo_size_object(td_->file_manager_.get(), &audio->thumbnail),
+                                       td_->file_manager_->get_file_object(file_id));
 }
 
 FileId AudiosManager::on_get_audio(unique_ptr<Audio> new_audio, bool replace) {
   auto file_id = new_audio->file_id;
+  CHECK(file_id.is_valid());
   LOG(INFO) << "Receive audio " << file_id;
   auto &a = audios_[file_id];
   if (a == nullptr) {
@@ -64,6 +66,10 @@ FileId AudiosManager::on_get_audio(unique_ptr<Audio> new_audio, bool replace) {
     if (a->file_name != new_audio->file_name) {
       LOG(DEBUG) << "Audio " << file_id << " file name has changed";
       a->file_name = std::move(new_audio->file_name);
+      a->is_changed = true;
+    }
+    if (a->minithumbnail != new_audio->minithumbnail) {
+      a->minithumbnail = std::move(new_audio->minithumbnail);
       a->is_changed = true;
     }
     if (a->thumbnail != new_audio->thumbnail) {
@@ -163,8 +169,8 @@ void AudiosManager::delete_audio_thumbnail(FileId file_id) {
   audio->thumbnail = PhotoSize();
 }
 
-void AudiosManager::create_audio(FileId file_id, PhotoSize thumbnail, string file_name, string mime_type,
-                                 int32 duration, string title, string performer, bool replace) {
+void AudiosManager::create_audio(FileId file_id, string minithumbnail, PhotoSize thumbnail, string file_name,
+                                 string mime_type, int32 duration, string title, string performer, bool replace) {
   auto a = make_unique<Audio>();
   a->file_id = file_id;
   a->file_name = std::move(file_name);
@@ -172,6 +178,7 @@ void AudiosManager::create_audio(FileId file_id, PhotoSize thumbnail, string fil
   a->duration = max(duration, 0);
   a->title = std::move(title);
   a->performer = std::move(performer);
+  a->minithumbnail = std::move(minithumbnail);
   a->thumbnail = std::move(thumbnail);
   on_get_audio(std::move(a), replace);
 }
@@ -187,7 +194,7 @@ SecretInputMedia AudiosManager::get_secret_input_media(FileId audio_file_id,
     return SecretInputMedia{};
   }
   if (file_view.has_remote_location()) {
-    input_file = file_view.remote_location().as_input_encrypted_file();
+    input_file = file_view.main_remote_location().as_input_encrypted_file();
   }
   if (!input_file) {
     return SecretInputMedia{};
@@ -218,8 +225,8 @@ tl_object_ptr<telegram_api::InputMedia> AudiosManager::get_input_media(
   if (file_view.is_encrypted()) {
     return nullptr;
   }
-  if (file_view.has_remote_location() && !file_view.remote_location().is_web() && input_file == nullptr) {
-    return make_tl_object<telegram_api::inputMediaDocument>(0, file_view.remote_location().as_input_document(), 0);
+  if (file_view.has_remote_location() && !file_view.main_remote_location().is_web() && input_file == nullptr) {
+    return make_tl_object<telegram_api::inputMediaDocument>(0, file_view.main_remote_location().as_input_document(), 0);
   }
   if (file_view.has_url()) {
     return make_tl_object<telegram_api::inputMediaDocumentExternal>(0, file_view.url(), 0);

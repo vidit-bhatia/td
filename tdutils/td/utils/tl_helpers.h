@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,14 +9,17 @@
 #include "td/utils/common.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
+#include "td/utils/SharedSlice.h"
 #include "td/utils/Slice.h"
 #include "td/utils/StackAllocator.h"
 #include "td/utils/Status.h"
 #include "td/utils/tl_parsers.h"
 #include "td/utils/tl_storers.h"
+#include "td/utils/Variant.h"
 
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 
 #define BEGIN_STORE_FLAGS() \
   do {                      \
@@ -43,17 +46,12 @@
   flag = ((flags_parse >> bit_offset_parse) & 1) != 0; \
   bit_offset_parse++
 
-#define END_PARSE_FLAGS()                                                   \
-  CHECK(bit_offset_parse < 31);                                             \
-  LOG_CHECK((flags_parse & ~((1 << bit_offset_parse) - 1)) == 0)            \
-      << flags_parse << " " << bit_offset_parse << " " << parser.version(); \
-  }                                                                         \
-  while (false)
-
-#define END_PARSE_FLAGS_GENERIC()                                                                           \
-  CHECK(bit_offset_parse < 31);                                                                             \
-  LOG_CHECK((flags_parse & ~((1 << bit_offset_parse) - 1)) == 0) << flags_parse << " " << bit_offset_parse; \
-  }                                                                                                         \
+#define END_PARSE_FLAGS()                                                                                           \
+  CHECK(bit_offset_parse < 31);                                                                                     \
+  if ((flags_parse & ~((1 << bit_offset_parse) - 1)) != 0) {                                                        \
+    parser.set_error(PSTRING() << "Invalid flags " << flags_parse << " left, current bit is " << bit_offset_parse); \
+  }                                                                                                                 \
+  }                                                                                                                 \
   while (false)
 
 namespace td {
@@ -119,9 +117,18 @@ template <class StorerT>
 void store(const string &x, StorerT &storer) {
   storer.store_string(x);
 }
+template <class StorerT>
+void store(const SecureString &x, StorerT &storer) {
+  storer.store_string(x.as_slice());
+}
 template <class ParserT>
 void parse(string &x, ParserT &parser) {
   x = parser.template fetch_string<string>();
+}
+
+template <class ParserT>
+void parse(SecureString &x, ParserT &parser) {
+  x = parser.template fetch_string<SecureString>();
 }
 
 template <class T, class StorerT>
@@ -142,6 +149,18 @@ void parse(vector<T> &vec, ParserT &parser) {
   for (auto &val : vec) {
     parse(val, parser);
   }
+}
+
+template <class T, class StorerT>
+void store(const unique_ptr<T> &ptr, StorerT &storer) {
+  CHECK(ptr != nullptr);
+  store(*ptr, storer);
+}
+template <class T, class ParserT>
+void parse(unique_ptr<T> &ptr, ParserT &parser) {
+  CHECK(ptr == nullptr);
+  ptr = make_unique<T>();
+  parse(*ptr, parser);
 }
 
 template <class Key, class Hash, class KeyEqual, class Allocator, class StorerT>
@@ -166,6 +185,17 @@ void parse(std::unordered_set<Key, Hash, KeyEqual, Allocator> &s, ParserT &parse
   }
 }
 
+template <class U, class V, class StorerT>
+void store(const std::pair<U, V> &pair, StorerT &storer) {
+  store(pair.first, storer);
+  store(pair.second, storer);
+}
+template <class U, class V, class ParserT>
+void parse(std::pair<U, V> &pair, ParserT &parser) {
+  parse(pair.first, parser);
+  parse(pair.second, parser);
+}
+
 template <class T, class StorerT>
 std::enable_if_t<std::is_enum<T>::value> store(const T &val, StorerT &storer) {
   store(static_cast<int32>(val), storer);
@@ -184,6 +214,29 @@ std::enable_if_t<!std::is_enum<T>::value> store(const T &val, StorerT &storer) {
 template <class T, class ParserT>
 std::enable_if_t<!std::is_enum<T>::value> parse(T &val, ParserT &parser) {
   val.parse(parser);
+}
+
+template <class... Types, class StorerT>
+void store(const Variant<Types...> &variant, StorerT &storer) {
+  store(variant.get_offset(), storer);
+  variant.visit([&storer](auto &&value) {
+    using td::store;
+    store(value, storer);
+  });
+}
+template <class... Types, class ParserT>
+void parse(Variant<Types...> &variant, ParserT &parser) {
+  auto type_offset = parser.fetch_int();
+  if (type_offset < 0 || type_offset >= static_cast<int32>(sizeof...(Types))) {
+    return parser.set_error("Invalid type");
+  }
+  variant.for_each([type_offset, &parser, &variant](int offset, auto *ptr) {
+    using T = std::decay_t<decltype(*ptr)>;
+    if (offset == type_offset) {
+      variant = T();
+      parse(variant.template get<T>(), parser);
+    }
+  });
 }
 
 template <class T>
@@ -206,6 +259,21 @@ string serialize(const T &object) {
     store(object, storer);
     CHECK(storer.get_buf() == data.uend());
   }
+  return key;
+}
+
+template <class T>
+SecureString serialize_secure(const T &object) {
+  TlStorerCalcLength calc_length;
+  store(object, calc_length);
+  size_t length = calc_length.get_length();
+
+  SecureString key(length, '\0');
+  CHECK(is_aligned_pointer<4>(key.data()));
+  MutableSlice data = key.as_mutable_slice();
+  TlStorerUnsafe storer(data.ubegin());
+  store(object, storer);
+  CHECK(storer.get_buf() == data.uend());
   return key;
 }
 

@@ -1,11 +1,12 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/telegram/net/NetQueryDispatcher.h"
 
+#include "td/telegram/net/AuthDataShared.h"
 #include "td/telegram/net/DcAuthManager.h"
 #include "td/telegram/net/NetQuery.h"
 #include "td/telegram/net/NetQueryDelayer.h"
@@ -17,6 +18,7 @@
 #include "td/telegram/Global.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/TdDb.h"
+#include "td/telegram/telegram_api.h"
 
 #include "td/utils/common.h"
 #include "td/utils/format.h"
@@ -39,9 +41,19 @@ void NetQueryDispatcher::complete_net_query(NetQueryPtr net_query) {
 }
 
 void NetQueryDispatcher::dispatch(NetQueryPtr net_query) {
-  net_query->debug("dispatch");
+  // net_query->debug("dispatch");
   if (stop_flag_.load(std::memory_order_relaxed)) {
-    net_query->set_error(Status::Error(500, "Request aborted"));
+    if (net_query->id() != 0) {
+      net_query->set_error(Status::Error(500, "Request aborted"));
+    }
+    return complete_net_query(std::move(net_query));
+  }
+  if (net_query->id() != 0 && G()->shared_config().get_option_boolean("test_flood_wait")) {
+    net_query->set_error(Status::Error(429, "Too Many Requests: retry after 10"));
+    return complete_net_query(std::move(net_query));
+  }
+  if (net_query->tl_constructor() == telegram_api::account_getPassword::ID && false) {
+    net_query->set_error(Status::Error(429, "Too Many Requests: retry after 10"));
     return complete_net_query(std::move(net_query));
   }
 
@@ -110,7 +122,7 @@ Status NetQueryDispatcher::wait_dc_init(DcId dc_id, bool force) {
   }
   size_t pos = static_cast<size_t>(dc_id.get_raw_id() - 1);
   if (pos >= dcs_.size()) {
-    return Status::Error("Too big DC id");
+    return Status::Error("Too big DC ID");
   }
   auto &dc = dcs_[pos];
 
@@ -289,26 +301,7 @@ void NetQueryDispatcher::try_fix_migrate(NetQueryPtr &net_query) {
   for (auto &prefix : prefixes) {
     if (msg.substr(0, prefix.size()) == prefix) {
       int32 new_main_dc_id = to_integer<int32>(msg.substr(prefix.size()));
-      if (!DcId::is_valid(new_main_dc_id)) {
-        LOG(FATAL) << "Receive " << prefix << " to wrong dc " << new_main_dc_id;
-      }
-      if (new_main_dc_id != main_dc_id_.load(std::memory_order_relaxed)) {
-        // Very rare event. Mutex is ok.
-        std::lock_guard<std::mutex> guard(main_dc_id_mutex_);
-        if (new_main_dc_id != main_dc_id_) {
-          LOG(INFO) << "Update: " << tag("main_dc_id", main_dc_id_.load(std::memory_order_relaxed));
-          if (is_dc_inited(main_dc_id_.load(std::memory_order_relaxed))) {
-            send_closure_later(dcs_[main_dc_id_ - 1].main_session_, &SessionMultiProxy::update_main_flag, false);
-          }
-          main_dc_id_ = new_main_dc_id;
-          if (is_dc_inited(main_dc_id_.load(std::memory_order_relaxed))) {
-            send_closure_later(dcs_[main_dc_id_ - 1].main_session_, &SessionMultiProxy::update_main_flag, true);
-          }
-          send_closure_later(dc_auth_manager_, &DcAuthManager::update_main_dc,
-                             DcId::internal(main_dc_id_.load(std::memory_order_relaxed)));
-          G()->td_db()->get_binlog_pmc()->set("main_dc_id", to_string(main_dc_id_.load(std::memory_order_relaxed)));
-        }
-      }
+      set_main_dc_id(new_main_dc_id);
 
       if (!net_query->dc_id().is_main()) {
         LOG(ERROR) << msg << " from query to non-main dc " << net_query->dc_id();
@@ -319,6 +312,34 @@ void NetQueryDispatcher::try_fix_migrate(NetQueryPtr &net_query) {
       break;
     }
   }
+}
+
+void NetQueryDispatcher::set_main_dc_id(int32 new_main_dc_id) {
+  if (!DcId::is_valid(new_main_dc_id)) {
+    LOG(ERROR) << "Receive wrong DC " << new_main_dc_id;
+    return;
+  }
+  if (new_main_dc_id == main_dc_id_.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  // Very rare event. Mutex is ok.
+  std::lock_guard<std::mutex> guard(main_dc_id_mutex_);
+  if (new_main_dc_id == main_dc_id_) {
+    return;
+  }
+
+  LOG(INFO) << "Update main DcId from " << main_dc_id_.load(std::memory_order_relaxed) << " to " << new_main_dc_id;
+  if (is_dc_inited(main_dc_id_.load(std::memory_order_relaxed))) {
+    send_closure_later(dcs_[main_dc_id_ - 1].main_session_, &SessionMultiProxy::update_main_flag, false);
+  }
+  main_dc_id_ = new_main_dc_id;
+  if (is_dc_inited(main_dc_id_.load(std::memory_order_relaxed))) {
+    send_closure_later(dcs_[main_dc_id_ - 1].main_session_, &SessionMultiProxy::update_main_flag, true);
+  }
+  send_closure_later(dc_auth_manager_, &DcAuthManager::update_main_dc,
+                     DcId::internal(main_dc_id_.load(std::memory_order_relaxed)));
+  G()->td_db()->get_binlog_pmc()->set("main_dc_id", to_string(main_dc_id_.load(std::memory_order_relaxed)));
 }
 
 }  // namespace td

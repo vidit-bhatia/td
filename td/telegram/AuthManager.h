@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -15,6 +15,7 @@
 #include "td/telegram/telegram_api.h"
 
 #include "td/actor/actor.h"
+#include "td/actor/Timeout.h"
 
 #include "td/utils/common.h"
 #include "td/utils/Status.h"
@@ -27,20 +28,24 @@ class AuthManager : public NetActor {
   AuthManager(int32 api_id, const string &api_hash, ActorShared<> parent);
 
   bool is_bot() const;
-  void set_is_bot(bool is_bot);
 
   bool is_authorized() const;
   void get_state(uint64 query_id);
 
-  void set_phone_number(uint64 query_id, string phone_number, bool allow_flash_call, bool is_current_phone_number);
+  void set_phone_number(uint64 query_id, string phone_number,
+                        td_api::object_ptr<td_api::phoneNumberAuthenticationSettings> settings);
   void resend_authentication_code(uint64 query_id);
-  void check_code(uint64 query_id, string code, string first_name, string last_name);
+  void check_code(uint64 query_id, string code);
+  void register_user(uint64 query_id, string first_name, string last_name);
+  void request_qr_code_authentication(uint64 query_id, vector<int32> other_user_ids);
   void check_bot_token(uint64 query_id, string bot_token);
   void check_password(uint64 query_id, string password);
   void request_password_recovery(uint64 query_id);
   void recover_password(uint64 query_id, string code);
   void logout(uint64 query_id);
   void delete_account(uint64 query_id, const string &reason);
+
+  void on_update_login_token();
 
   void on_authorization_lost();
   void on_closing(bool destroy_flag);
@@ -55,7 +60,9 @@ class AuthManager : public NetActor {
     None,
     WaitPhoneNumber,
     WaitCode,
+    WaitQrCodeConfirmation,
     WaitPassword,
+    WaitRegistration,
     Ok,
     LoggingOut,
     DestroyingKeys,
@@ -66,6 +73,8 @@ class AuthManager : public NetActor {
     SignIn,
     SignUp,
     SendCode,
+    RequestQrCode,
+    ImportQrCode,
     GetPassword,
     CheckPassword,
     RequestPasswordRecovery,
@@ -101,30 +110,45 @@ class AuthManager : public NetActor {
 
     // WaitCode
     SendCodeHelper send_code_helper_;
-    TermsOfService terms_of_service_;
+
+    // WaitQrCodeConfirmation
+    vector<int32> other_user_ids_;
+    string login_token_;
+    double login_token_expires_at_ = 0;
 
     // WaitPassword
     WaitPasswordState wait_password_state_;
 
-    static DbState wait_code(int32 api_id, string api_hash, SendCodeHelper send_code_helper,
-                             TermsOfService terms_of_service) {
-      DbState state;
-      state.state_ = State::WaitCode;
-      state.api_id_ = api_id;
-      state.api_hash_ = api_hash;
+    // WaitRegistration
+    TermsOfService terms_of_service_;
+
+    DbState() = default;
+    static DbState wait_code(int32 api_id, string api_hash, SendCodeHelper send_code_helper) {
+      DbState state(State::WaitCode, api_id, api_hash);
       state.send_code_helper_ = std::move(send_code_helper);
-      state.terms_of_service_ = std::move(terms_of_service);
-      state.state_timestamp_ = Timestamp::now();
+      return state;
+    }
+
+    static DbState wait_qr_code_confirmation(int32 api_id, string api_hash, vector<int32> other_user_ids,
+                                             string login_token, double login_token_expires_at) {
+      DbState state(State::WaitQrCodeConfirmation, api_id, api_hash);
+      state.other_user_ids_ = std::move(other_user_ids);
+      state.login_token_ = std::move(login_token);
+      state.login_token_expires_at_ = login_token_expires_at;
       return state;
     }
 
     static DbState wait_password(int32 api_id, string api_hash, WaitPasswordState wait_password_state) {
-      DbState state;
-      state.state_ = State::WaitPassword;
-      state.api_id_ = api_id;
-      state.api_hash_ = api_hash;
+      DbState state(State::WaitPassword, api_id, api_hash);
       state.wait_password_state_ = std::move(wait_password_state);
-      state.state_timestamp_ = Timestamp::now();
+      return state;
+    }
+
+    static DbState wait_registration(int32 api_id, string api_hash, SendCodeHelper send_code_helper,
+                                     TermsOfService terms_of_service) {
+      DbState state(State::WaitRegistration, api_id, api_hash);
+      state.send_code_helper_ = std::move(send_code_helper);
+      state.terms_of_service_ = std::move(terms_of_service);
       return state;
     }
 
@@ -132,6 +156,11 @@ class AuthManager : public NetActor {
     void store(StorerT &storer) const;
     template <class ParserT>
     void parse(ParserT &parser);
+
+   private:
+    DbState(State state, int32 api_id, string api_hash)
+        : state_(state), api_id_(api_id), api_hash_(api_hash), state_timestamp_(Timestamp::now()) {
+    }
   };
 
   bool load_state();
@@ -147,15 +176,30 @@ class AuthManager : public NetActor {
   // State::WaitCode
   SendCodeHelper send_code_helper_;
   string code_;
+
+  // State::WaitQrCodeConfirmation
+  vector<int32> other_user_ids_;
+  string login_token_;
+  double login_token_expires_at_ = 0.0;
+  int32 imported_dc_id_ = -1;
+
+  // State::WaitPassword
   string password_;
+
+  // State::WaitRegistration
   TermsOfService terms_of_service_;
 
   // for bots
   string bot_token_;
+
   uint64 query_id_ = 0;
 
   WaitPasswordState wait_password_state_;
 
+  int32 login_code_retry_delay_ = 0;
+  Timeout poll_export_login_code_timeout_;
+
+  bool was_qr_code_request_ = false;
   bool was_check_bot_token_ = false;
   bool is_bot_ = false;
   uint64 net_query_id_ = 0;
@@ -169,15 +213,20 @@ class AuthManager : public NetActor {
   void on_query_ok();
   void start_net_query(NetQueryType net_query_type, NetQueryPtr net_query);
 
+  static void on_update_login_token_static(void *td);
+  void send_export_login_token_query();
+  void set_login_token_expires_at(double login_token_expires_at);
   void destroy_auth_keys();
 
   void on_send_code_result(NetQueryPtr &result);
+  void on_request_qr_code_result(NetQueryPtr &result, bool is_import);
   void on_get_password_result(NetQueryPtr &result);
   void on_request_password_recovery_result(NetQueryPtr &result);
   void on_authentication_result(NetQueryPtr &result, bool expected_flag);
   void on_log_out_result(NetQueryPtr &result);
   void on_delete_account_result(NetQueryPtr &result);
-  void on_authorization(tl_object_ptr<telegram_api::auth_authorization> auth);
+  void on_get_login_token(tl_object_ptr<telegram_api::auth_LoginToken> login_token);
+  void on_get_authorization(tl_object_ptr<telegram_api::auth_Authorization> auth_ptr);
 
   void on_result(NetQueryPtr result) override;
 

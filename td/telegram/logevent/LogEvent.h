@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -13,6 +13,7 @@
 #include "td/utils/common.h"
 #include "td/utils/format.h"
 #include "td/utils/logging.h"
+#include "td/utils/misc.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
 #include "td/utils/StorerBase.h"
@@ -93,6 +94,8 @@ class LogEvent {
     GetDialogFromServer = 0x113,
     ReadHistoryInSecretChat = 0x114,
     ToggleDialogIsMarkedAsUnreadOnServer = 0x115,
+    SetDialogFolderIdOnServer = 0x116,
+    DeleteScheduledMessagesFromServer = 0x117,
     GetChannelDifference = 0x140,
     AddMessagePushNotification = 0x200,
     EditMessagePushNotification = 0x201,
@@ -276,8 +279,10 @@ BufferSlice log_event_store(const T &data) {
   store(data, storer_calc_length);
 
   BufferSlice value_buffer{storer_calc_length.get_length()};
+  auto ptr = value_buffer.as_slice().ubegin();
+  LOG_CHECK(is_aligned_pointer<4>(ptr)) << ptr;
 
-  LogEventStorerUnsafe storer_unsafe(value_buffer.as_slice().ubegin());
+  LogEventStorerUnsafe storer_unsafe(ptr);
   store(data, storer_unsafe);
 
 #ifdef TD_DEBUG

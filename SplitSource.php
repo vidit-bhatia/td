@@ -157,6 +157,7 @@ function split_file($file, $chunks, $undo) {
                            '(CREATE_REQUEST|CREATE_NO_ARGS_REQUEST)[(](?<name>[A-Z][A-Za-z]*)|'.
                            '(?<name>complete_pending_preauthentication_requests)|'.
                            '(Up|Down)load[a-zA-Z]*C(?<name>allback)|(up|down)load_[a-z_]*_c(?<name>allback)_|'.
+                           '(?<name>lazy_to_json)|'.
                            '(?<name>LogEvent)[^sA]|'.
                            '(?<name>parse)[(]|'.
                            '(?<name>store)[(]/', $f, $matches, PREG_SET_ORDER)) {
@@ -223,6 +224,7 @@ function split_file($file, $chunks, $undo) {
             'std::reverse' => 'algorithm',
             'std::rotate' => 'algorithm',
             'std::sort' => 'algorithm',
+            'std::abs' => 'cmath',
             'std::numeric_limits' => 'limits',
             'std::make_shared' => 'memory',
             'std::shared_ptr' => 'memory',
@@ -271,13 +273,15 @@ function split_file($file, $chunks, $undo) {
                 'HashtagHints' => 'HashtagHints',
                 'inline_queries_manager[_(-][^.]|InlineQueriesManager' => 'InlineQueriesManager',
                 'language_pack_manager[_(-][^.]|LanguagePackManager' => 'LanguagePackManager',
-                'get_erase_logevent_promise' => 'logevent/LogEventHelper',
+                'get_erase_logevent_promise|parse_time|store_time' => 'logevent/LogEventHelper',
                 'messages_manager[_(-][^.]|MessagesManager' => 'MessagesManager',
                 'notification_manager[_(-][^.]|NotificationManager|notifications[)]' => 'NotificationManager',
+                'PublicDialogType|get_public_dialog_type' => 'PublicDialogType',
                 'SecretChatActor' => 'SecretChatActor',
                 'secret_chats_manager[_(-][^.]|SecretChatsManager' => 'SecretChatsManager',
                 'stickers_manager[_(-][^.]|StickersManager' => 'StickersManager',
                 '[>](td_db[(][)]|get_td_db_impl[(])|TdDb[^A-Za-z]' => 'TdDb',
+                'TopDialogCategory|top_dialog_category_from_td_api' => 'TopDialogCategory',
                 'top_dialog_manager[_(-][^.]|TopDialogManager' => 'TopDialogManager',
                 'updates_manager[_(-][^.]|UpdatesManager|get_difference[)]' => 'UpdatesManager',
                 'WebPageId(Hash)?' => 'WebPageId',
@@ -314,7 +318,10 @@ function split_file($file, $chunks, $undo) {
 }
 
 if (in_array('--help', $argv) || in_array('-h', $argv)) {
-    echo "Usage: php SplitSource.php [OPTION]...\nSplits some source files to reduce maximum RAM needed for compiling a single file.\n  -u, --undo Undo all source code changes.\n  -h, --help Show this help.\n";
+    echo "Usage: php SplitSource.php [OPTION]...\n".
+         "Splits some source files to reduce a maximum amount of RAM needed for compiling a single file.\n".
+         "  -u, --undo Undo all source code changes.\n".
+         "  -h, --help Show this help.\n";
     exit(2);
 }
 

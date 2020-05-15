@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -110,15 +110,15 @@ class Stage {
   std::atomic<uint64> value_{0};
 };
 
-inline string rand_string(char from, char to, int len) {
-  string res(len, 0);
+inline string rand_string(int from, int to, size_t len) {
+  string res(len, '\0');
   for (auto &c : res) {
     c = static_cast<char>(Random::fast(from, to));
   }
   return res;
 }
 
-inline vector<string> rand_split(string str) {
+inline vector<string> rand_split(Slice str) {
   vector<string> res;
   size_t pos = 0;
   while (pos < str.size()) {
@@ -128,7 +128,7 @@ inline vector<string> rand_split(string str) {
     } else {
       len = Random::fast(100, 200);
     }
-    res.push_back(str.substr(pos, len));
+    res.push_back(str.substr(pos, len).str());
     pos += len;
   }
   return res;

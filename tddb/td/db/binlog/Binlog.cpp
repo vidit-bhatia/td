@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -83,7 +83,7 @@ struct AesCtrEncryptionEvent {
   void parse(ParserT &&parser) {
     using td::parse;
     BEGIN_PARSE_FLAGS();
-    END_PARSE_FLAGS_GENERIC();
+    END_PARSE_FLAGS();
     parse(key_salt_, parser);
     parse(iv_, parser);
     parse(key_hash_, parser);
@@ -108,7 +108,7 @@ class BinlogReader {
     return offset_;
   }
   Result<size_t> read_next(BinlogEvent *event) {
-    if (state_ == ReadLength) {
+    if (state_ == State::ReadLength) {
       if (input_->size() < 4) {
         return 4;
       }
@@ -129,7 +129,7 @@ class BinlogReader {
                                           << expected_size_ << ' ' << tag("is_encrypted", is_encrypted_)
                                           << format::as_hex_dump<4>(Slice(input_->prepare_read().truncate(28))));
       }
-      state_ = ReadEvent;
+      state_ = State::ReadEvent;
     }
 
     if (input_->size() < size_) {
@@ -140,13 +140,14 @@ class BinlogReader {
     TRY_STATUS(event->init(input_->cut_head(size_).move_as_buffer_slice()));
     offset_ += size_;
     event->offset_ = offset_;
-    state_ = ReadLength;
+    state_ = State::ReadLength;
     return 0;
   }
 
  private:
   ChainBufferReader *input_;
-  enum { ReadLength, ReadEvent } state_ = ReadLength;
+  enum class State { ReadLength, ReadEvent };
+  State state_ = State::ReadLength;
   size_t size_{0};
   int64 offset_{0};
   int64 expected_size_{0};
@@ -161,8 +162,6 @@ static int64 file_size(CSlice path) {
   return r_stat.ok().size_;
 }
 }  // namespace detail
-
-bool Binlog::IGNORE_ERASE_HACK = false;
 
 Binlog::Binlog() = default;
 
@@ -445,7 +444,9 @@ void Binlog::update_read_encryption() {
   CHECK(binlog_reader_ptr_);
   switch (encryption_type_) {
     case EncryptionType::None: {
-      binlog_reader_ptr_->set_input(&buffer_reader_, false, fd_.get_size());
+      auto r_file_size = fd_.get_size();
+      r_file_size.ensure();
+      binlog_reader_ptr_->set_input(&buffer_reader_, false, r_file_size.ok());
       byte_flow_flag_ = false;
       break;
     }
@@ -456,7 +457,9 @@ void Binlog::update_read_encryption() {
       byte_flow_sink_ = ByteFlowSink();
       byte_flow_source_ >> aes_xcode_byte_flow_ >> byte_flow_sink_;
       byte_flow_flag_ = true;
-      binlog_reader_ptr_->set_input(byte_flow_sink_.get_output(), true, fd_.get_size());
+      auto r_file_size = fd_.get_size();
+      r_file_size.ensure();
+      binlog_reader_ptr_->set_input(byte_flow_sink_.get_output(), true, r_file_size.ok());
       break;
     }
   }
@@ -517,17 +520,12 @@ Status Binlog::load_binlog(const Callback &callback, const Callback &debug_callb
     auto need_size = r_need_size.move_as_ok();
     // LOG(ERROR) << "Need size = " << need_size;
     if (need_size == 0) {
-      if (IGNORE_ERASE_HACK && event.type_ == BinlogEvent::ServiceTypes::Empty &&
-          (event.flags_ & BinlogEvent::Flags::Rewrite) != 0) {
-        // skip erase
-      } else {
-        if (debug_callback) {
-          debug_callback(event);
-        }
-        do_add_event(std::move(event));
-        if (info_.wrong_password) {
-          return Status::OK();
-        }
+      if (debug_callback) {
+        debug_callback(event);
+      }
+      do_add_event(std::move(event));
+      if (info_.wrong_password) {
+        return Status::OK();
       }
     } else {
       TRY_STATUS(fd_.flush_read(max(need_size, static_cast<size_t>(4096))));
@@ -549,14 +547,14 @@ Status Binlog::load_binlog(const Callback &callback, const Callback &debug_callb
     }
   });
 
-  auto fd_size = fd_.get_size();
+  TRY_RESULT(fd_size, fd_.get_size());
   if (offset != fd_size) {
     LOG(ERROR) << "Truncate " << tag("path", path_) << tag("old_size", fd_size) << tag("new_size", offset);
     fd_.seek(offset).ensure();
     fd_.truncate_to_current_position(offset).ensure();
     db_key_used_ = false;  // force reindex
   }
-  LOG_CHECK(IGNORE_ERASE_HACK || fd_size_ == offset) << fd_size << " " << fd_size_ << " " << offset;
+  LOG_CHECK(fd_size_ == offset) << fd_size << " " << fd_size_ << " " << offset;
   binlog_reader_ptr_ = nullptr;
   state_ = State::Run;
 
@@ -576,7 +574,7 @@ void Binlog::update_encryption(Slice key, Slice iv) {
   as_slice(aes_ctr_key_).copy_from(key);
   UInt128 aes_ctr_iv;
   as_slice(aes_ctr_iv).copy_from(iv);
-  aes_ctr_state_.init(aes_ctr_key_, aes_ctr_iv);
+  aes_ctr_state_.init(as_slice(aes_ctr_key_), as_slice(aes_ctr_iv));
 }
 
 void Binlog::reset_encryption() {

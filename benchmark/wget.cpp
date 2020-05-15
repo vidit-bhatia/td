@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -27,7 +27,8 @@ int main(int argc, char *argv[]) {
   auto scheduler = td::make_unique<td::ConcurrentScheduler>();
   scheduler->init(0);
   scheduler
-      ->create_actor_unsafe<td::Wget>(0, "Client", td::PromiseCreator::lambda([](td::Result<td::HttpQueryPtr> res) {
+      ->create_actor_unsafe<td::Wget>(0, "Client",
+                                      td::PromiseCreator::lambda([](td::Result<td::unique_ptr<td::HttpQuery>> res) {
                                         LOG(ERROR) << *res.ok();
                                         td::Scheduler::instance()->finish();
                                       }),

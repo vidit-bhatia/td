@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -19,7 +19,7 @@ unique_ptr<IStreamTransport> create_transport(TransportType type) {
     case TransportType::Tcp:
       return td::make_unique<tcp::OldTransport>();
     case TransportType::Http:
-      return td::make_unique<http::Transport>(type.secret);
+      return td::make_unique<http::Transport>(type.secret.get_raw_secret().str());
   }
   UNREACHABLE();
 }

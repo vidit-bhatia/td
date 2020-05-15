@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -22,15 +22,52 @@
 
 namespace td {
 
-inline int32 count_leading_zeroes32(uint32 x);
-inline int32 count_leading_zeroes64(uint64 x);
-inline int32 count_trailing_zeroes32(uint32 x);
-inline int32 count_trailing_zeroes64(uint64 x);
-inline uint32 bswap32(uint32 x);
-inline uint64 bswap64(uint64 x);
-inline int32 count_bits32(uint32 x);
-inline int32 count_bits64(uint64 x);
+int32 count_leading_zeroes32(uint32 x);
+int32 count_leading_zeroes64(uint64 x);
+int32 count_trailing_zeroes32(uint32 x);
+int32 count_trailing_zeroes64(uint64 x);
+uint32 bswap32(uint32 x);
+uint64 bswap64(uint64 x);
+int32 count_bits32(uint32 x);
+int32 count_bits64(uint64 x);
 
+inline uint32 bits_negate32(uint32 x) {
+  return ~x + 1;
+}
+
+inline uint64 bits_negate64(uint64 x) {
+  return ~x + 1;
+}
+
+inline uint32 lower_bit32(uint32 x) {
+  return x & bits_negate32(x);
+}
+
+inline uint64 lower_bit64(uint64 x) {
+  return x & bits_negate64(x);
+}
+
+//TODO: optimize
+inline int32 count_leading_zeroes_non_zero32(uint32 x) {
+  DCHECK(x != 0);
+  return count_leading_zeroes32(x);
+}
+inline int32 count_leading_zeroes_non_zero64(uint64 x) {
+  DCHECK(x != 0);
+  return count_leading_zeroes64(x);
+}
+inline int32 count_trailing_zeroes_non_zero32(uint32 x) {
+  DCHECK(x != 0);
+  return count_trailing_zeroes32(x);
+}
+inline int32 count_trailing_zeroes_non_zero64(uint64 x) {
+  DCHECK(x != 0);
+  return count_trailing_zeroes64(x);
+}
+
+//
+// Platform specific implementation
+//
 #if TD_MSVC
 
 inline int32 count_leading_zeroes32(uint32 x) {
@@ -90,7 +127,11 @@ inline uint64 bswap64(uint64 x) {
 }
 
 inline int32 count_bits32(uint32 x) {
-  return __popcnt(x);
+  x -= (x >> 1) & 0x55555555;
+  x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+  x = (x + (x >> 4)) & 0x0F0F0F0F;
+  x += x >> 8;
+  return (x + (x >> 16)) & 0x3F;
 }
 
 inline int32 count_bits64(uint64 x) {
@@ -160,11 +201,15 @@ inline uint64 bswap64(uint64 x) {
 }
 
 inline int32 count_bits32(uint32 x) {
-  return _popcnt32(static_cast<int>(x));
+  x -= (x >> 1) & 0x55555555;
+  x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+  x = (x + (x >> 4)) & 0x0F0F0F0F;
+  x += x >> 8;
+  return (x + (x >> 16)) & 0x3F;
 }
 
 inline int32 count_bits64(uint64 x) {
-  return _popcnt64(static_cast<__int64>(x));
+  return count_bits32(static_cast<uint32>(x >> 32)) + count_bits32(static_cast<uint32>(x));
 }
 
 #else
@@ -214,23 +259,5 @@ inline int32 count_bits64(uint64 x) {
 }
 
 #endif
-
-//TODO: optimize
-inline int32 count_leading_zeroes_non_zero32(uint32 x) {
-  DCHECK(x != 0);
-  return count_leading_zeroes32(x);
-}
-inline int32 count_leading_zeroes_non_zero64(uint64 x) {
-  DCHECK(x != 0);
-  return count_leading_zeroes64(x);
-}
-inline int32 count_trailing_zeroes_non_zero32(uint32 x) {
-  DCHECK(x != 0);
-  return count_trailing_zeroes32(x);
-}
-inline int32 count_trailing_zeroes_non_zero64(uint64 x) {
-  DCHECK(x != 0);
-  return count_trailing_zeroes64(x);
-}
 
 }  // namespace td

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -49,7 +49,7 @@ class MessageIdDuplicateChecker {
 class AuthData {
  public:
   AuthData();
-  AuthData(const AuthData &) = delete;
+  AuthData(const AuthData &) = default;
   AuthData &operator=(const AuthData &) = delete;
   AuthData(AuthData &&) = delete;
   AuthData &operator=(AuthData &&) = delete;
@@ -59,6 +59,9 @@ class AuthData {
 
   void set_main_auth_key(AuthKey auth_key) {
     main_auth_key_ = std::move(auth_key);
+  }
+  void break_main_auth_key() {
+    main_auth_key_.break_key();
   }
   const AuthKey &get_main_auth_key() const {
     // CHECK(has_main_auth_key());

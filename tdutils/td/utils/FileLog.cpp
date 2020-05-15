@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,20 +17,20 @@
 
 namespace td {
 
-Status FileLog::init(string path, int64 rotate_threshold) {
+Status FileLog::init(string path, int64 rotate_threshold, bool redirect_stderr) {
+  if (path.empty()) {
+    return Status::Error("Log file path can't be empty");
+  }
   if (path == path_) {
     set_rotate_threshold(rotate_threshold);
     return Status::OK();
-  }
-  if (path.empty()) {
-    return Status::Error("Log file path can't be empty");
   }
 
   TRY_RESULT(fd, FileFd::open(path, FileFd::Create | FileFd::Write | FileFd::Append));
 
   fd_.close();
   fd_ = std::move(fd);
-  if (!Stderr().empty()) {
+  if (!Stderr().empty() && redirect_stderr) {
     fd_.get_native_fd().duplicate(Stderr().get_native_fd()).ignore();
   }
 
@@ -40,8 +40,9 @@ Status FileLog::init(string path, int64 rotate_threshold) {
   } else {
     path_ = r_path.move_as_ok();
   }
-  size_ = fd_.get_size();
+  TRY_RESULT_ASSIGN(size_, fd_.get_size());
   rotate_threshold_ = rotate_threshold;
+  redirect_stderr_ = redirect_stderr;
   return Status::OK();
 }
 
@@ -107,7 +108,7 @@ void FileLog::do_rotate() {
     process_fatal_error(PSLICE() << r_fd.error() << " in " << __FILE__ << " at " << __LINE__);
   }
   fd_ = r_fd.move_as_ok();
-  if (!Stderr().empty()) {
+  if (!Stderr().empty() && redirect_stderr_) {
     fd_.get_native_fd().duplicate(Stderr().get_native_fd()).ignore();
   }
   size_ = 0;

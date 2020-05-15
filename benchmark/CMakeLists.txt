@@ -7,7 +7,7 @@ endif()
 
 #TODO: all benchmarks in one file
 add_executable(bench_crypto bench_crypto.cpp)
-target_link_libraries(bench_crypto PRIVATE tdcore tdutils ${OPENSSL_CRYPTO_LIBRARY} ${CMAKE_DL_LIBS} ${ZLIB_LIBRARIES})
+target_link_libraries(bench_crypto PRIVATE tdutils ${OPENSSL_CRYPTO_LIBRARY} ${CMAKE_DL_LIBS} ${ZLIB_LIBRARIES})
 target_include_directories(bench_crypto SYSTEM PRIVATE ${OPENSSL_INCLUDE_DIR})
 
 add_executable(bench_actor bench_actor.cpp)
@@ -39,6 +39,12 @@ target_link_libraries(bench_tddb PRIVATE tdcore tddb tdutils)
 
 add_executable(bench_misc bench_misc.cpp)
 target_link_libraries(bench_misc PRIVATE tdcore tdutils)
+
+add_executable(check_proxy check_proxy.cpp)
+target_link_libraries(check_proxy PRIVATE tdclient tdutils)
+
+add_executable(check_tls check_tls.cpp)
+target_link_libraries(check_tls PRIVATE tdutils)
 
 add_executable(rmdir rmdir.cpp)
 target_link_libraries(rmdir PRIVATE tdutils)

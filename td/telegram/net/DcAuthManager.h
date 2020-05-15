@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -32,7 +32,7 @@ class DcAuthManager : public NetQueryCallback {
   struct DcInfo {
     DcId dc_id;
     std::shared_ptr<AuthDataShared> shared_auth_data;
-    AuthState auth_state;
+    AuthKeyState auth_key_state;
 
     enum class State : int32 { Waiting, Export, Import, BeforeOk, Ok };
     State state = State::Waiting;
@@ -52,7 +52,7 @@ class DcAuthManager : public NetQueryCallback {
   DcInfo &get_dc(int32 dc_id);
   DcInfo *find_dc(int32 dc_id);
 
-  void update_auth_state();
+  void update_auth_key_state();
 
   void on_result(NetQueryPtr result) override;
   void dc_loop(DcInfo &dc);

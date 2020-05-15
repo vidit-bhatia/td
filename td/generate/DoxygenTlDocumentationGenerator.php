@@ -10,15 +10,17 @@ class DoxygenTlDocumentationGenerator extends TlDocumentationGenerator
             case 'Bool':
                 return 'bool ';
             case 'int32':
-                return 'std::int32_t ';
+                return 'int32 ';
             case 'int53':
+                return 'int53 ';
             case 'int64':
-                return 'std::int64_t ';
+                return 'int64 ';
             case 'double':
                 return 'double ';
             case 'string':
+                return 'string const &';
             case 'bytes':
-                return 'std::string const &';
+                return 'bytes const &';
 
             default:
                 if (substr($type, 0, 6) === 'vector') {
@@ -38,6 +40,11 @@ class DoxygenTlDocumentationGenerator extends TlDocumentationGenerator
     protected function escapeDocumentation($doc)
     {
         $doc = htmlspecialchars($doc);
+        $doc = preg_replace_callback('/&quot;((http|https|tg):\/\/[^" ]*)&quot;/',
+            function ($quoted_link)
+            {
+                return "&quot;<a href=\"".$quoted_link[1]."\">".$quoted_link[1]."</a>&quot;";
+            }, $doc);
         $doc = str_replace('*/', '*&#47;', $doc);
         $doc = str_replace('#', '\#', $doc);
         return $doc;
@@ -62,15 +69,17 @@ class DoxygenTlDocumentationGenerator extends TlDocumentationGenerator
             case 'Bool':
                 return 'bool';
             case 'int32':
-                return 'std::int32_t';
+                return 'int32';
             case 'int53':
+                return 'int53';
             case 'int64':
-                return 'std::int64_t';
+                return 'int64';
             case 'double':
                 return 'double';
             case 'string':
+                return 'string';
             case 'bytes':
-                return 'std::string';
+                return 'bytes';
             case 'bool':
             case 'int':
             case 'long':
@@ -160,6 +169,41 @@ class DoxygenTlDocumentationGenerator extends TlDocumentationGenerator
 EOT
 );
 
+        $this->addDocumentation('using int32 = std::int32_t;', <<<EOT
+/**
+ * This type is used to store 32-bit signed integers, which can be represented as Number in JSON.
+ */
+EOT
+);
+
+        $this->addDocumentation('using int53 = std::int64_t;', <<<EOT
+/**
+ * This type is used to store 53-bit signed integers, which can be represented as Number in JSON.
+ */
+EOT
+);
+
+        $this->addDocumentation('using int64 = std::int64_t;', <<<EOT
+/**
+ * This type is used to store 64-bit signed integers, which can't be represented as Number in JSON and are represented as String instead.
+ */
+EOT
+);
+
+        $this->addDocumentation('using string = std::string;', <<<EOT
+/**
+ * This type is used to store UTF-8 strings.
+ */
+EOT
+);
+
+        $this->addDocumentation('using bytes = std::string;', <<<EOT
+/**
+ * This type is used to store arbitrary sequences of bytes. In JSON interface the bytes are base64-encoded.
+ */
+EOT
+);
+
         $this->addDocumentation('using BaseObject', <<<EOT
 /**
  * This class is a base class for all TDLib API classes and functions.
@@ -181,8 +225,8 @@ EOT
  * \\code
  * auto get_authorization_state_request = td::td_api::make_object<td::td_api::getAuthorizationState>();
  * auto message_text = td::td_api::make_object<td::td_api::formattedText>("Hello, world!!!",
- *                     std::vector<td::td_api::object_ptr<td::td_api::textEntities>>());
- * auto send_message_request = td::td_api::make_object<td::td_api::sendMessage>(chat_id, 0, false, false, nullptr,
+ *                     std::vector<td::td_api::object_ptr<td::td_api::textEntity>>());
+ * auto send_message_request = td::td_api::make_object<td::td_api::sendMessage>(chat_id, 0, nullptr, nullptr,
  *      td::td_api::make_object<td::td_api::inputMessageText>(std::move(message_text), false, true));
  * \\endcode
  *

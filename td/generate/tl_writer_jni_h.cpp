@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -78,6 +78,18 @@ std::string TD_TL_writer_jni_h::gen_output_begin() const {
          "namespace " +
          tl_name +
          " {\n\n"
+
+         "using int32 = std::int32_t;\n"
+         "using int53 = std::int64_t;\n"
+         "using int64 = std::int64_t;\n\n"
+
+         "using string = " +
+         string_type +
+         ";\n\n"
+
+         "using bytes = " +
+         bytes_type +
+         ";\n\n"
 
          "class " +
          gen_base_tl_class_name() +

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -81,6 +81,18 @@ int64 Random::secure_int64() {
   return res;
 }
 
+uint32 Random::secure_uint32() {
+  uint32 res = 0;
+  secure_bytes(reinterpret_cast<unsigned char *>(&res), sizeof(uint32));
+  return res;
+}
+
+uint64 Random::secure_uint64() {
+  uint64 res = 0;
+  secure_bytes(reinterpret_cast<unsigned char *>(&res), sizeof(uint64));
+  return res;
+}
+
 void Random::add_seed(Slice bytes, double entropy) {
   RAND_add(bytes.data(), static_cast<int>(bytes.size()), entropy);
   random_seed_generation++;
@@ -123,7 +135,7 @@ int Random::fast(int min, int max) {
 }
 
 Random::Xorshift128plus::Xorshift128plus(uint64 seed) {
-  auto next = [&]() {
+  auto next = [&] {
     // splitmix64
     seed += static_cast<uint64>(0x9E3779B97F4A7C15);
     uint64 z = seed;

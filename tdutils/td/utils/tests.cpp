@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -38,7 +38,7 @@ class RegressionTesterImpl : public RegressionTester {
   }
 
   RegressionTesterImpl(string db_path, string db_cache_dir) : db_path_(db_path), db_cache_dir_(db_cache_dir) {
-    load_db(db_path);
+    load_db(db_path).ignore();
     if (db_cache_dir_.empty()) {
       db_cache_dir_ = PathView(db_path).without_extension().str() + ".cache/";
     }
@@ -100,7 +100,7 @@ class RegressionTesterImpl : public RegressionTester {
 
   Status load_db(CSlice path) {
     TRY_RESULT(data, read_file(path));
-    Parser parser(data.as_slice());
+    ConstParser parser(data.as_slice());
     auto db_magic = parser.read_word();
     if (db_magic != magic()) {
       return Status::Error(PSLICE() << "Wrong magic " << db_magic);

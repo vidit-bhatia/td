@@ -21,6 +21,9 @@ message(STATUS "Found Java: ${Java_JAVAC_EXECUTABLE} ${Java_JAVADOC_EXECUTABLE}"
 
 # Generating TdApi.java
 find_program(PHP_EXECUTABLE php)
+if ((CMAKE_SYSTEM_NAME MATCHES "FreeBSD") AND (CMAKE_SYSTEM_VERSION MATCHES "HBSD"))
+  set(PHP_EXECUTABLE "PHP_EXECUTABLE-NOTFOUND")
+endif()
 
 set(TD_API_JAVA_PACKAGE "org/drinkless/tdlib")
 set(TD_API_JAVA_PATH ${CMAKE_CURRENT_SOURCE_DIR})
@@ -47,7 +50,6 @@ add_custom_target(build_java
   DEPENDS td_generate_java_api
 )
 
-set(JAVA_SOURCE_PATH "${TD_API_JAVA_PATH}/${TD_API_JAVA_PACKAGE}")
 add_custom_target(generate_javadoc
   COMMAND ${Java_JAVADOC_EXECUTABLE} -d ${JAVA_OUTPUT_DIRECTORY}/../docs org.drinkless.tdlib
   WORKING_DIRECTORY ${TD_API_JAVA_PATH}

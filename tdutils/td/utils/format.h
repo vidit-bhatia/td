@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -192,7 +192,7 @@ inline StringBuilder &operator<<(StringBuilder &logger, Size t) {
     uint64 value;
   };
 
-  static constexpr NamedValue sizes[] = {{"B", 1}, {"kB", 1 << 10}, {"MB", 1 << 20}, {"GB", 1 << 30}};
+  static constexpr NamedValue sizes[] = {{"B", 1}, {"KB", 1 << 10}, {"MB", 1 << 20}, {"GB", 1 << 30}};
   static constexpr size_t sizes_n = sizeof(sizes) / sizeof(NamedValue);
 
   size_t i = 0;
@@ -218,6 +218,19 @@ StringBuilder &operator<<(StringBuilder &stream, const Array<ArrayT> &array) {
   bool first = true;
   stream << Slice("{");
   for (auto &x : array.ref) {
+    if (!first) {
+      stream << Slice(", ");
+    }
+    stream << x;
+    first = false;
+  }
+  return stream << Slice("}");
+}
+
+inline StringBuilder &operator<<(StringBuilder &stream, const Array<vector<bool>> &array) {
+  bool first = true;
+  stream << Slice("{");
+  for (bool x : array.ref) {
     if (!first) {
       stream << Slice(", ");
     }

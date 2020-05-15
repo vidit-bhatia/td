@@ -1,12 +1,11 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #pragma once
 
-#include "td/telegram/net/AuthDataShared.h"
 #include "td/telegram/net/DcId.h"
 #include "td/telegram/net/NetQuery.h"
 
@@ -56,6 +55,8 @@ class NetQueryDispatcher {
   DcId main_dc_id() const {
     return DcId::internal(main_dc_id_.load());
   }
+
+  void set_main_dc_id(int32 new_main_dc_id);
 
  private:
   std::atomic<bool> stop_flag_{false};

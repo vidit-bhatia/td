@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -41,9 +41,9 @@ extern void *__libc_stack_end;
 static void *get_bp() {
   void *bp;
 #if defined(__i386__)
-  __asm__ volatile("movl %%ebp, %[r]" : [r] "=r"(bp));
+  __asm__ volatile("movl %%ebp, %[r]" : [ r ] "=r"(bp));
 #elif defined(__x86_64__)
-  __asm__ volatile("movq %%rbp, %[r]" : [r] "=r"(bp));
+  __asm__ volatile("movq %%rbp, %[r]" : [ r ] "=r"(bp));
 #endif
   return bp;
 }

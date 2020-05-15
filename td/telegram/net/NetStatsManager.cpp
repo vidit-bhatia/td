@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,6 +9,7 @@
 #include "td/actor/actor.h"
 #include "td/actor/PromiseFuture.h"
 
+#include "td/telegram/ConfigShared.h"
 #include "td/telegram/Global.h"
 #include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/StateManager.h"
@@ -59,7 +60,7 @@ void NetStatsManager::init() {
   };
 
   for_each_stat([&](NetStatsInfo &stat, size_t id, CSlice name, FileType file_type) {
-    if (file_type == FileType::SecureRaw) {
+    if (file_type == FileType::SecureRaw || file_type == FileType::Wallpaper) {
       id++;
     }
     stat.key = "net_stats_" + name.str();
@@ -112,7 +113,7 @@ void NetStatsManager::get_network_stats(bool current, Promise<NetworkStats> prom
         entry.is_call = true;
         result.entries.push_back(std::move(entry));
       } else if (file_type != FileType::None) {
-        if (file_type == FileType::SecureRaw) {
+        if (file_type == FileType::SecureRaw || file_type == FileType::Wallpaper) {
           return;
         }
 
@@ -192,7 +193,7 @@ void NetStatsManager::add_network_stats_impl(NetStatsInfo &info, const NetworkSt
 
 void NetStatsManager::start_up() {
   for_each_stat([&](NetStatsInfo &info, size_t id, CSlice name, FileType file_type) {
-    if (file_type == FileType::SecureRaw) {
+    if (file_type == FileType::SecureRaw || file_type == FileType::Wallpaper) {
       return;
     }
 
@@ -213,8 +214,12 @@ void NetStatsManager::start_up() {
   auto since_str = G()->td_db()->get_binlog_pmc()->get("net_stats_since");
   if (!since_str.empty()) {
     auto since = to_integer<int32>(since_str);
+    auto authorization_date = G()->shared_config().get_option_integer("authorization_date");
     if (unix_time < since) {
       since_total_ = unix_time;
+      G()->td_db()->get_binlog_pmc()->set("net_stats_since", to_string(since_total_));
+    } else if (since < authorization_date - 3600) {
+      since_total_ = authorization_date;
       G()->td_db()->get_binlog_pmc()->set("net_stats_since", to_string(since_total_));
     } else {
       since_total_ = since;
@@ -252,6 +257,7 @@ std::shared_ptr<NetStatsCallback> NetStatsManager::get_media_stats_callback() co
 std::vector<std::shared_ptr<NetStatsCallback>> NetStatsManager::get_file_stats_callbacks() const {
   auto result = transform(files_stats_, [](auto &stat) { return stat.stats.get_callback(); });
   result[static_cast<int32>(FileType::SecureRaw)] = result[static_cast<int32>(FileType::Secure)];
+  result[static_cast<int32>(FileType::Wallpaper)] = result[static_cast<int32>(FileType::Background)];
   return result;
 }
 

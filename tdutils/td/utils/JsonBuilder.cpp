@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -591,6 +591,15 @@ bool has_json_object_field(const JsonObject &object, Slice name) {
     }
   }
   return false;
+}
+
+JsonValue get_json_object_field_force(JsonObject &object, Slice name) {
+  for (auto &field_value : object) {
+    if (field_value.first == name) {
+      return std::move(field_value.second);
+    }
+  }
+  return JsonValue();
 }
 
 Result<JsonValue> get_json_object_field(JsonObject &object, Slice name, JsonValue::Type type, bool is_optional) {

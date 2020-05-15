@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -30,7 +30,7 @@ class SHA1Bench : public td::Benchmark {
   alignas(64) unsigned char data[DATA_SIZE];
 
   std::string get_description() const override {
-    return PSTRING() << "SHA1 OpenSSL [" << (DATA_SIZE >> 10) << "kB]";
+    return PSTRING() << "SHA1 OpenSSL [" << (DATA_SIZE >> 10) << "KB]";
   }
 
   void start_up() override {
@@ -55,7 +55,7 @@ class AESBench : public td::Benchmark {
   td::UInt256 iv;
 
   std::string get_description() const override {
-    return PSTRING() << "AES OpenSSL [" << (DATA_SIZE >> 10) << "kB]";
+    return PSTRING() << "AES OpenSSL [" << (DATA_SIZE >> 10) << "KB]";
   }
 
   void start_up() override {
@@ -69,7 +69,7 @@ class AESBench : public td::Benchmark {
   void run(int n) override {
     td::MutableSlice data_slice(data, DATA_SIZE);
     for (int i = 0; i < n; i++) {
-      td::aes_ige_encrypt(key, &iv, data_slice, data_slice);
+      td::aes_ige_encrypt(as_slice(key), as_slice(iv), data_slice, data_slice);
     }
   }
 };
@@ -152,7 +152,7 @@ class Crc32Bench : public td::Benchmark {
   alignas(64) unsigned char data[DATA_SIZE];
 
   std::string get_description() const override {
-    return PSTRING() << "Crc32 zlib [" << (DATA_SIZE >> 10) << "kB]";
+    return PSTRING() << "Crc32 zlib [" << (DATA_SIZE >> 10) << "KB]";
   }
 
   void start_up() override {
@@ -176,7 +176,7 @@ class Crc64Bench : public td::Benchmark {
   alignas(64) unsigned char data[DATA_SIZE];
 
   std::string get_description() const override {
-    return PSTRING() << "Crc64 Anton [" << (DATA_SIZE >> 10) << "kB]";
+    return PSTRING() << "Crc64 Anton [" << (DATA_SIZE >> 10) << "KB]";
   }
 
   void start_up() override {

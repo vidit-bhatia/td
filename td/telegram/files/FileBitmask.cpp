@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -21,9 +21,23 @@ Bitmask::Bitmask(Ones, int64 count) : data_(narrow_cast<size_t>((count + 7) / 8)
   }
 }
 
+Bitmask Bitmask::compress(int k) const {
+  Bitmask res;
+  for (int64 i = 0; i * k < size(); i++) {
+    bool f = true;
+    for (int64 j = 0; j < k && f; j++) {
+      f &= get(i * k + j);
+    }
+    if (f) {
+      res.set(i);
+    }
+  }
+  return res;
+}
+
 std::string Bitmask::encode(int32 prefix_count) {
   // remove zeroes in the end to make encoding deterministic
-  td::Slice data(data_);
+  Slice data(data_);
 
   int save_i = -1;
   char save_c;

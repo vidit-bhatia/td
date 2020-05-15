@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,6 +17,7 @@
 #include "td/telegram/DocumentsManager.h"
 #include "td/telegram/files/FileManager.h"
 #include "td/telegram/Global.h"
+#include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/MessagesManager.h"
 #include "td/telegram/misc.h"
 #include "td/telegram/net/ConnectionCreator.h"
@@ -24,6 +25,7 @@
 #include "td/telegram/Photo.h"
 #include "td/telegram/Photo.hpp"
 #include "td/telegram/SecretChatId.h"
+#include "td/telegram/ServerMessageId.h"
 #include "td/telegram/StateManager.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/TdDb.h"
@@ -71,8 +73,7 @@ class SetContactSignUpNotificationQuery : public Td::ResultHandler {
   }
 
   void send(bool is_disabled) {
-    send_query(G()->net_query_creator().create(
-        create_storer(telegram_api::account_setContactSignUpNotification(is_disabled))));
+    send_query(G()->net_query_creator().create(telegram_api::account_setContactSignUpNotification(is_disabled)));
   }
 
   void on_result(uint64 id, BufferSlice packet) override {
@@ -85,7 +86,7 @@ class SetContactSignUpNotificationQuery : public Td::ResultHandler {
   }
 
   void on_error(uint64 id, Status status) override {
-    if (!G()->close_flag()) {
+    if (!G()->is_expected_error(status)) {
       LOG(ERROR) << "Receive error for set contact sign up notification: " << status;
     }
     promise_.set_error(std::move(status));
@@ -100,7 +101,7 @@ class GetContactSignUpNotificationQuery : public Td::ResultHandler {
   }
 
   void send() {
-    send_query(G()->net_query_creator().create(create_storer(telegram_api::account_getContactSignUpNotification())));
+    send_query(G()->net_query_creator().create(telegram_api::account_getContactSignUpNotification()));
   }
 
   void on_result(uint64 id, BufferSlice packet) override {
@@ -114,7 +115,7 @@ class GetContactSignUpNotificationQuery : public Td::ResultHandler {
   }
 
   void on_error(uint64 id, Status status) override {
-    if (!G()->close_flag() || 1) {
+    if (!G()->is_expected_error(status)) {
       LOG(ERROR) << "Receive error for get contact sign up notification: " << status;
     }
     promise_.set_error(std::move(status));
@@ -166,13 +167,7 @@ bool NotificationManager::is_disabled() const {
   return !td_->auth_manager_->is_authorized() || td_->auth_manager_->is_bot() || G()->close_flag();
 }
 
-namespace {
-
-struct ActiveNotificationsUpdate {
-  const td_api::updateActiveNotifications *update;
-};
-
-StringBuilder &operator<<(StringBuilder &string_builder, const ActiveNotificationsUpdate &update) {
+StringBuilder &operator<<(StringBuilder &string_builder, const NotificationManager::ActiveNotificationsUpdate &update) {
   if (update.update == nullptr) {
     return string_builder << "null";
   }
@@ -190,11 +185,10 @@ StringBuilder &operator<<(StringBuilder &string_builder, const ActiveNotificatio
   return string_builder << ']';
 }
 
-ActiveNotificationsUpdate as_active_notifications_update(const td_api::updateActiveNotifications *update) {
+NotificationManager::ActiveNotificationsUpdate NotificationManager::as_active_notifications_update(
+    const td_api::updateActiveNotifications *update) {
   return ActiveNotificationsUpdate{update};
 }
-
-}  // namespace
 
 string NotificationManager::get_is_contact_registered_notifications_synchronized_key() {
   return "notifications_contact_registered_sync_state";
@@ -248,18 +242,24 @@ void NotificationManager::init() {
 
   auto call_notification_group_ids_string = G()->td_db()->get_binlog_pmc()->get("notification_call_group_ids");
   if (!call_notification_group_ids_string.empty()) {
-    call_notification_group_ids_ = transform(full_split(call_notification_group_ids_string, ','), [](Slice str) {
+    auto call_notification_group_ids = transform(full_split(call_notification_group_ids_string, ','), [](Slice str) {
       return NotificationGroupId{to_integer_safe<int32>(str).ok()};
     });
-    VLOG(notifications) << "Load call_notification_group_ids_ = " << call_notification_group_ids_;
-    for (auto &group_id : call_notification_group_ids_) {
+    VLOG(notifications) << "Load call_notification_group_ids = " << call_notification_group_ids;
+    for (auto &group_id : call_notification_group_ids) {
       if (group_id.get() > current_notification_group_id_.get()) {
         LOG(ERROR) << "Fix current notification group id from " << current_notification_group_id_ << " to " << group_id;
         current_notification_group_id_ = group_id;
         G()->td_db()->get_binlog_pmc()->set("notification_group_id_current",
                                             to_string(current_notification_group_id_.get()));
       }
-      available_call_notification_group_ids_.insert(group_id);
+      auto it = get_group_force(group_id);
+      if (it != groups_.end()) {
+        LOG(ERROR) << "Have " << it->first << " " << it->second << " as a call notification group";
+      } else {
+        call_notification_group_ids_.push_back(group_id);
+        available_call_notification_group_ids_.insert(group_id);
+      }
     }
   }
 
@@ -363,7 +363,11 @@ void NotificationManager::tear_down() {
 }
 
 NotificationManager::NotificationGroups::iterator NotificationManager::add_group(NotificationGroupKey &&group_key,
-                                                                                 NotificationGroup &&group) {
+                                                                                 NotificationGroup &&group,
+                                                                                 const char *source) {
+  if (group.notifications.empty()) {
+    LOG_CHECK(group_key.last_notification_date == 0) << "Trying to add empty " << group_key << " from " << source;
+  }
   bool is_inserted = group_keys_.emplace(group_key.group_id, group_key).second;
   CHECK(is_inserted);
   return groups_.emplace(std::move(group_key), std::move(group)).first;
@@ -393,8 +397,7 @@ NotificationManager::NotificationGroups::iterator NotificationManager::get_group
     return group_it;
   }
 
-  if (std::find(call_notification_group_ids_.begin(), call_notification_group_ids_.end(), group_id) !=
-      call_notification_group_ids_.end()) {
+  if (td::contains(call_notification_group_ids_, group_id)) {
     return groups_.end();
   }
 
@@ -439,7 +442,7 @@ NotificationManager::NotificationGroups::iterator NotificationManager::get_group
       send_add_group_update(group_key, group);
     }
   }
-  return add_group(std::move(group_key), std::move(group));
+  return add_group(std::move(group_key), std::move(group), "get_group_force");
 }
 
 void NotificationManager::delete_group(NotificationGroups::iterator &&group_it) {
@@ -597,6 +600,13 @@ void NotificationManager::on_get_message_notifications_from_database(Notificatio
       notifications.pop_back();
     }
   }
+  auto first_message_id = get_first_message_id(group);
+  if (first_message_id.is_valid()) {
+    while (!notifications.empty() && notifications.back().type->get_message_id() >= first_message_id) {
+      // possible if notifications was added after the database request was sent
+      notifications.pop_back();
+    }
+  }
 
   add_notifications_to_group_begin(std::move(group_it), std::move(notifications));
 
@@ -610,6 +620,10 @@ void NotificationManager::on_get_message_notifications_from_database(Notificatio
 void NotificationManager::add_notifications_to_group_begin(NotificationGroups::iterator group_it,
                                                            vector<Notification> notifications) {
   CHECK(group_it != groups_.end());
+
+  td::remove_if(notifications, [dialog_id = group_it->first.dialog_id](const Notification &notification) {
+    return notification.type->get_notification_type_object(dialog_id) == nullptr;
+  });
 
   if (notifications.empty()) {
     return;
@@ -666,11 +680,8 @@ void NotificationManager::add_notifications_to_group_begin(NotificationGroups::i
     added_notifications.reserve(notifications.size());
     for (auto &notification : notifications) {
       added_notifications.push_back(get_notification_object(group_key.dialog_id, notification));
-      if (added_notifications.back()->type_ == nullptr) {
-        added_notifications.pop_back();
-      } else {
-        new_notifications.push_back(std::move(notification));
-      }
+      CHECK(added_notifications.back()->type_ != nullptr);
+      new_notifications.push_back(std::move(notification));
     }
     notifications = std::move(new_notifications);
 
@@ -703,8 +714,9 @@ void NotificationManager::add_notifications_to_group_begin(NotificationGroups::i
   }
 
   if (is_position_changed) {
-    add_group(std::move(final_group_key), std::move(group));
+    add_group(std::move(final_group_key), std::move(group), "add_notifications_to_group_begin");
   } else {
+    CHECK(group_it->first.last_notification_date == 0 || !group.notifications.empty());
     group_it->second = std::move(group);
   }
 }
@@ -761,8 +773,7 @@ void NotificationManager::try_reuse_notification_group_id(NotificationGroupId gr
 
   auto group_it = get_group(group_id);
   if (group_it != groups_.end()) {
-    CHECK(group_it->first.last_notification_date == 0);
-    LOG_CHECK(group_it->second.total_count == 0)
+    LOG_CHECK(group_it->first.last_notification_date == 0 && group_it->second.total_count == 0)
         << running_get_difference_ << " " << delayed_notification_update_count_ << " "
         << unreceived_notification_update_count_ << " " << pending_updates_[group_id.get()].size() << " "
         << group_it->first << " " << group_it->second;
@@ -806,10 +817,10 @@ int32 NotificationManager::get_notification_delay_ms(DialogId dialog_id, const P
     return MIN_NOTIFICATION_DELAY_MS;
   }
 
-  auto delay_ms = [&]() {
+  auto delay_ms = [&] {
     auto online_info = td_->contacts_manager_->get_my_online_status();
     if (!online_info.is_online_local && online_info.is_online_remote) {
-      // If we are offline, but online from some other client then delay notification
+      // If we are offline, but online from some other client, then delay notification
       // for 'notification_cloud_delay' seconds.
       return notification_cloud_delay_ms_;
     }
@@ -837,8 +848,9 @@ int32 NotificationManager::get_notification_delay_ms(DialogId dialog_id, const P
 
 void NotificationManager::add_notification(NotificationGroupId group_id, NotificationGroupType group_type,
                                            DialogId dialog_id, int32 date, DialogId notification_settings_dialog_id,
-                                           bool is_silent, int32 min_delay_ms, NotificationId notification_id,
-                                           unique_ptr<NotificationType> type, const char *source) {
+                                           bool initial_is_silent, bool is_silent, int32 min_delay_ms,
+                                           NotificationId notification_id, unique_ptr<NotificationType> type,
+                                           const char *source) {
   if (is_disabled() || max_notification_group_count_ == 0) {
     on_notification_removed(notification_id);
     return;
@@ -859,7 +871,7 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
 
   auto group_it = get_group_force(group_id);
   if (group_it == groups_.end()) {
-    group_it = add_group(NotificationGroupKey(group_id, dialog_id, 0), NotificationGroup());
+    group_it = add_group(NotificationGroupKey(group_id, dialog_id, 0), NotificationGroup(), "add_notification");
   }
   if (group_it->second.notifications.empty() && group_it->second.pending_notifications.empty()) {
     group_it->second.type = group_type;
@@ -874,7 +886,7 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
     return;
   }
   auto message_id = type->get_message_id();
-  if (message_id.is_valid() && message_id.get() <= get_last_message_id(group).get()) {
+  if (message_id.is_valid() && message_id <= get_last_message_id(group)) {
     LOG(ERROR) << "Failed to add " << notification_id << " of type " << *type << " to " << group_id << " of type "
                << group_type << " in " << dialog_id << ", because have already added notification about "
                << get_last_message_id(group);
@@ -885,6 +897,7 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
   PendingNotification notification;
   notification.date = date;
   notification.settings_dialog_id = notification_settings_dialog_id;
+  notification.initial_is_silent = initial_is_silent;
   notification.is_silent = is_silent;
   notification.notification_id = notification_id;
   notification.type = std::move(type);
@@ -903,13 +916,7 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
   group.pending_notifications.push_back(std::move(notification));
 }
 
-namespace {
-
-struct NotificationUpdate {
-  const td_api::Update *update;
-};
-
-StringBuilder &operator<<(StringBuilder &string_builder, const NotificationUpdate &update) {
+StringBuilder &operator<<(StringBuilder &string_builder, const NotificationManager::NotificationUpdate &update) {
   if (update.update == nullptr) {
     return string_builder << "null";
   }
@@ -938,11 +945,9 @@ StringBuilder &operator<<(StringBuilder &string_builder, const NotificationUpdat
   }
 }
 
-NotificationUpdate as_notification_update(const td_api::Update *update) {
+NotificationManager::NotificationUpdate NotificationManager::as_notification_update(const td_api::Update *update) {
   return NotificationUpdate{update};
 }
-
-}  // namespace
 
 void NotificationManager::add_update(int32 group_id, td_api::object_ptr<td_api::Update> update) {
   if (!is_binlog_processed_ || !is_inited_) {
@@ -1002,8 +1007,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
     VLOG(notifications) << "Have " << as_notification_update(update.get());
   }
 
-  updates.erase(std::remove_if(updates.begin(), updates.end(), [](auto &update) { return update == nullptr; }),
-                updates.end());
+  td::remove_if(updates, [](auto &update) { return update == nullptr; });
 
   // if a notification was added, then deleted and then re-added we need to keep
   // first addition, because it can be with sound,
@@ -1035,10 +1039,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
           notification_id = 0;
         }
       }
-      update_ptr->removed_notification_ids_.erase(
-          std::remove_if(update_ptr->removed_notification_ids_.begin(), update_ptr->removed_notification_ids_.end(),
-                         [](auto &notification_id) { return notification_id == 0; }),
-          update_ptr->removed_notification_ids_.end());
+      td::remove_if(update_ptr->removed_notification_ids_, [](auto &notification_id) { return notification_id == 0; });
     } else {
       CHECK(update->get_id() == td_api::updateNotification::ID);
       auto update_ptr = static_cast<td_api::updateNotification *>(update.get());
@@ -1128,10 +1129,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
           // it is a first addition/edit of needed notification
           first_add_notification_pos[notification_id] = cur_pos;
         }
-        update_ptr->added_notifications_.erase(
-            std::remove_if(update_ptr->added_notifications_.begin(), update_ptr->added_notifications_.end(),
-                           [](auto &notification) { return notification == nullptr; }),
-            update_ptr->added_notifications_.end());
+        td::remove_if(update_ptr->added_notifications_, [](auto &notification) { return notification == nullptr; });
         if (update_ptr->added_notifications_.empty() && !update_ptr->is_silent_) {
           update_ptr->is_silent_ = true;
           is_changed = true;
@@ -1170,10 +1168,8 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
 
           // we need to keep the deletion, because otherwise we will have 2 consequent additions
         }
-        update_ptr->removed_notification_ids_.erase(
-            std::remove_if(update_ptr->removed_notification_ids_.begin(), update_ptr->removed_notification_ids_.end(),
-                           [](auto &notification_id) { return notification_id == 0; }),
-            update_ptr->removed_notification_ids_.end());
+        td::remove_if(update_ptr->removed_notification_ids_,
+                      [](auto &notification_id) { return notification_id == 0; });
 
         if (update_ptr->removed_notification_ids_.empty() && update_ptr->added_notifications_.empty()) {
           for (size_t i = cur_pos - 1; i > 0; i--) {
@@ -1264,8 +1260,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
       CHECK(old_size == update_ptr->removed_notification_ids_.size());
     }
 
-    updates.erase(std::remove_if(updates.begin(), updates.end(), [](auto &update) { return update == nullptr; }),
-                  updates.end());
+    td::remove_if(updates, [](auto &update) { return update == nullptr; });
     if (updates.empty()) {
       VLOG(notifications) << "There are no updates to send in " << NotificationGroupId(group_id);
       break;
@@ -1274,7 +1269,7 @@ void NotificationManager::flush_pending_updates(int32 group_id, const char *sour
     auto has_common_notifications = [](const vector<td_api::object_ptr<td_api::notification>> &notifications,
                                        const vector<int32> &notification_ids) {
       for (auto &notification : notifications) {
-        if (std::find(notification_ids.begin(), notification_ids.end(), notification->id_) != notification_ids.end()) {
+        if (td::contains(notification_ids, notification->id_)) {
           return true;
         }
       }
@@ -1388,16 +1383,14 @@ bool NotificationManager::do_flush_pending_notifications(NotificationGroupKey &g
   added_notifications.reserve(pending_notifications.size());
   for (auto &pending_notification : pending_notifications) {
     Notification notification(pending_notification.notification_id, pending_notification.date,
-                              std::move(pending_notification.type));
+                              pending_notification.initial_is_silent, std::move(pending_notification.type));
     added_notifications.push_back(get_notification_object(group_key.dialog_id, notification));
-    if (added_notifications.back()->type_ == nullptr) {
-      added_notifications.pop_back();
-    } else {
-      if (!notification.type->can_be_delayed()) {
-        force_update = true;
-      }
-      group.notifications.push_back(std::move(notification));
+    CHECK(added_notifications.back()->type_ != nullptr);
+
+    if (!notification.type->can_be_delayed()) {
+      force_update = true;
     }
+    group.notifications.push_back(std::move(notification));
   }
   group.total_count += narrow_cast<int32>(added_notifications.size());
   if (added_notifications.size() > max_notification_group_size_) {
@@ -1483,6 +1476,11 @@ void NotificationManager::flush_pending_notifications(NotificationGroupId group_
     return;
   }
 
+  td::remove_if(group_it->second.pending_notifications,
+                [dialog_id = group_it->first.dialog_id](const PendingNotification &pending_notification) {
+                  return pending_notification.type->get_notification_type_object(dialog_id) == nullptr;
+                });
+
   if (group_it->second.pending_notifications.empty()) {
     return;
   }
@@ -1516,7 +1514,7 @@ void NotificationManager::flush_pending_notifications(NotificationGroupId group_
     group.total_count += narrow_cast<int32>(group.pending_notifications.size());
     for (auto &pending_notification : group.pending_notifications) {
       group.notifications.emplace_back(pending_notification.notification_id, pending_notification.date,
-                                       std::move(pending_notification.type));
+                                       pending_notification.initial_is_silent, std::move(pending_notification.type));
     }
   } else {
     if (!was_updated) {
@@ -1563,7 +1561,7 @@ void NotificationManager::flush_pending_notifications(NotificationGroupId group_
     group.is_loaded_from_database = false;
   }
 
-  add_group(std::move(final_group_key), std::move(group));
+  add_group(std::move(final_group_key), std::move(group), "flush_pending_notifications");
 
   if (force_update) {
     if (removed_group_id.is_valid()) {
@@ -1610,6 +1608,13 @@ void NotificationManager::edit_notification(NotificationGroupId group_id, Notifi
   for (size_t i = 0; i < group.notifications.size(); i++) {
     auto &notification = group.notifications[i];
     if (notification.notification_id == notification_id) {
+      if (notification.type->get_message_id() != type->get_message_id() ||
+          notification.type->is_temporary() != type->is_temporary()) {
+        LOG(ERROR) << "Ignore edit of " << notification_id << " with " << *type << ", because previous type is "
+                   << *notification.type;
+        return;
+      }
+
       notification.type = std::move(type);
       if (i + max_notification_group_size_ >= group.notifications.size() &&
           !(get_last_updated_group_key() < group_it->first)) {
@@ -1621,6 +1626,13 @@ void NotificationManager::edit_notification(NotificationGroupId group_id, Notifi
   }
   for (auto &notification : group.pending_notifications) {
     if (notification.notification_id == notification_id) {
+      if (notification.type->get_message_id() != type->get_message_id() ||
+          notification.type->is_temporary() != type->is_temporary()) {
+        LOG(ERROR) << "Ignore edit of " << notification_id << " with " << *type << ", because previous type is "
+                   << *notification.type;
+        return;
+      }
+
       notification.type = std::move(type);
       return;
     }
@@ -1730,10 +1742,11 @@ void NotificationManager::on_notifications_removed(
   }
 
   if (is_position_changed) {
-    add_group(std::move(final_group_key), std::move(group));
+    add_group(std::move(final_group_key), std::move(group), "on_notifications_removed");
 
     last_group_key = get_last_updated_group_key();
   } else {
+    CHECK(group_it->first.last_notification_date == 0 || !group.notifications.empty());
     group_it->second = std::move(group);
   }
 
@@ -1763,12 +1776,9 @@ void NotificationManager::remove_added_notifications_from_pending_updates(
     if (update->get_id() == td_api::updateNotificationGroup::ID) {
       auto update_ptr = static_cast<td_api::updateNotificationGroup *>(update.get());
       if (!removed_notification_ids.empty() && !update_ptr->removed_notification_ids_.empty()) {
-        update_ptr->removed_notification_ids_.erase(
-            std::remove_if(update_ptr->removed_notification_ids_.begin(), update_ptr->removed_notification_ids_.end(),
-                           [&removed_notification_ids](auto &notification_id) {
-                             return removed_notification_ids.count(notification_id) == 1;
-                           }),
-            update_ptr->removed_notification_ids_.end());
+        td::remove_if(update_ptr->removed_notification_ids_, [&removed_notification_ids](auto &notification_id) {
+          return removed_notification_ids.count(notification_id) == 1;
+        });
       }
       for (auto &notification : update_ptr->added_notifications_) {
         if (is_removed(notification)) {
@@ -1777,10 +1787,7 @@ void NotificationManager::remove_added_notifications_from_pending_updates(
           notification = nullptr;
         }
       }
-      update_ptr->added_notifications_.erase(
-          std::remove_if(update_ptr->added_notifications_.begin(), update_ptr->added_notifications_.end(),
-                         [](auto &notification) { return notification == nullptr; }),
-          update_ptr->added_notifications_.end());
+      td::remove_if(update_ptr->added_notifications_, [](auto &notification) { return notification == nullptr; });
     } else {
       CHECK(update->get_id() == td_api::updateNotification::ID);
       auto update_ptr = static_cast<td_api::updateNotification *>(update.get());
@@ -1807,8 +1814,8 @@ void NotificationManager::remove_notification(NotificationGroupId group_id, Noti
     return promise.set_value(Unit());
   }
 
-  VLOG(notifications) << "Remove " << notification_id << " from " << group_id << " with force_update = " << force_update
-                      << " from " << source;
+  VLOG(notifications) << "Remove " << notification_id << " from " << group_id << " with is_permanent = " << is_permanent
+                      << ", force_update = " << force_update << " from " << source;
 
   auto group_it = get_group_force(group_id);
   if (group_it == groups_.end()) {
@@ -1845,9 +1852,10 @@ void NotificationManager::remove_notification(NotificationGroupId group_id, Noti
     }
   }
 
+  bool have_all_notifications = group_it->second.type == NotificationGroupType::Calls ||
+                                group_it->second.type == NotificationGroupType::SecretChat;
   bool is_total_count_changed = false;
-  if ((group_it->second.type != NotificationGroupType::Calls && is_permanent) ||
-      (group_it->second.type == NotificationGroupType::Calls && is_found)) {
+  if ((!have_all_notifications && is_permanent) || (have_all_notifications && is_found)) {
     if (group_it->second.total_count == 0) {
       LOG(ERROR) << "Total notification count became negative in " << group_id << " after removing " << notification_id;
     } else {
@@ -1963,7 +1971,7 @@ void NotificationManager::remove_notification_group(NotificationGroupId group_id
   for (auto it = group_it->second.pending_notifications.begin(); it != group_it->second.pending_notifications.end();
        ++it) {
     if (it->notification_id.get() <= max_notification_id.get() ||
-        (max_message_id.is_valid() && it->type->get_message_id().get() <= max_message_id.get())) {
+        (max_message_id.is_valid() && it->type->get_message_id() <= max_message_id)) {
       pending_delete_end = it + 1;
       on_notification_removed(it->notification_id);
     }
@@ -1990,7 +1998,7 @@ void NotificationManager::remove_notification_group(NotificationGroupId group_id
   for (size_t pos = 0; pos < notification_delete_end; pos++) {
     auto &notification = group_it->second.notifications[pos];
     if (notification.notification_id.get() > max_notification_id.get() &&
-        (!max_message_id.is_valid() || notification.type->get_message_id().get() > max_message_id.get())) {
+        (!max_message_id.is_valid() || notification.type->get_message_id() > max_message_id)) {
       notification_delete_end = pos;
     } else {
       on_notification_removed(notification.notification_id);
@@ -2013,7 +2021,8 @@ void NotificationManager::remove_notification_group(NotificationGroupId group_id
     group_it->second.notifications.erase(group_it->second.notifications.begin(),
                                          group_it->second.notifications.begin() + notification_delete_end);
   }
-  if (group_it->second.type == NotificationGroupType::Calls) {
+  if (group_it->second.type == NotificationGroupType::Calls ||
+      group_it->second.type == NotificationGroupType::SecretChat) {
     new_total_count = static_cast<int32>(group_it->second.notifications.size());
   }
   if (group_it->second.total_count == new_total_count) {
@@ -2091,6 +2100,7 @@ void NotificationManager::remove_temporary_notifications(NotificationGroupId gro
   }
   auto removed_notification_count = narrow_cast<int32>(old_group_size - notification_pos);
   if (removed_notification_count == 0) {
+    CHECK(get_temporary_notification_total_count(group_it->second) == 0);
     return;
   }
 
@@ -2104,7 +2114,9 @@ void NotificationManager::remove_temporary_notifications(NotificationGroupId gro
 
   vector<int32> removed_notification_ids;
   for (auto i = notification_pos; i < old_group_size; i++) {
-    CHECK(group.notifications[i].type->is_temporary());
+    LOG_CHECK(group.notifications[i].type->is_temporary())
+        << notification_pos << ' ' << i << ' ' << old_group_size << ' ' << removed_notification_count << ' '
+        << group.notifications[i] << ' ' << group << ' ' << group_it->first;
     VLOG(notifications) << "Remove temporary " << group.notifications[i] << " from " << group_id;
     auto notification_id = group.notifications[i].notification_id;
     on_notification_removed(notification_id);
@@ -2131,6 +2143,7 @@ void NotificationManager::remove_temporary_notifications(NotificationGroupId gro
     }
     std::reverse(added_notifications.begin(), added_notifications.end());
   }
+  CHECK(get_temporary_notification_total_count(group_it->second) == 0);
 
   on_notifications_removed(std::move(group_it), std::move(added_notifications), std::move(removed_notification_ids),
                            false);
@@ -2291,8 +2304,8 @@ void NotificationManager::add_call_notification(DialogId dialog_id, CallId call_
   }
   active_notifications.push_back(ActiveCallNotification{call_id, notification_id});
 
-  add_notification(group_id, NotificationGroupType::Calls, dialog_id, G()->unix_time() + 120, dialog_id, false, 0,
-                   notification_id, create_new_call_notification(call_id), "add_call_notification");
+  add_notification(group_id, NotificationGroupType::Calls, dialog_id, G()->unix_time() + 120, dialog_id, false, false,
+                   0, notification_id, create_new_call_notification(call_id), "add_call_notification");
 }
 
 void NotificationManager::remove_call_notification(DialogId dialog_id, CallId call_id) {
@@ -2326,7 +2339,8 @@ void NotificationManager::remove_call_notification(DialogId dialog_id, CallId ca
         force_flush_pending_updates(group_id, "reuse call group_id");
 
         auto group_it = get_group(group_id);
-        CHECK(group_it->first.dialog_id == dialog_id);
+        LOG_CHECK(group_it->first.dialog_id == dialog_id)
+            << group_id << ' ' << dialog_id << ' ' << group_it->first << ' ' << group_it->second;
         CHECK(group_it->first.last_notification_date == 0);
         CHECK(group_it->second.total_count == 0);
         CHECK(group_it->second.notifications.empty());
@@ -2631,12 +2645,13 @@ void NotificationManager::process_push_notification(string payload, Promise<Unit
   }
 
   auto receiver_id = r_receiver_id.move_as_ok();
-  VLOG(notifications) << "Process push notification \"" << format::escaped(payload)
-                      << "\" with receiver_id = " << receiver_id;
-
   auto encryption_keys = td_->device_token_manager_->get_actor_unsafe()->get_encryption_keys();
+  VLOG(notifications) << "Process push notification \"" << format::escaped(payload)
+                      << "\" with receiver_id = " << receiver_id << " and " << encryption_keys.size()
+                      << " encryption keys";
   bool was_encrypted = false;
   for (auto &key : encryption_keys) {
+    VLOG(notifications) << "Have key " << key.first;
     // VLOG(notifications) << "Have key " << key.first << ": \"" << format::escaped(key.second) << '"';
     if (key.first == receiver_id) {
       if (!key.second.empty()) {
@@ -2706,6 +2721,9 @@ string NotificationManager::convert_loc_key(const string &loc_key) {
     case 'D':
       if (loc_key == "MESSAGE_DOC") {
         return "MESSAGE_DOCUMENT";
+      }
+      if (loc_key == "ENCRYPTED_MESSAGE") {
+        return "MESSAGE";
       }
       break;
     case 'E':
@@ -2815,6 +2833,11 @@ string NotificationManager::convert_loc_key(const string &loc_key) {
         return "MESSAGE_POLL";
       }
       break;
+    case 'Q':
+      if (loc_key == "MESSAGE_QUIZ") {
+        return "MESSAGE_QUIZ";
+      }
+      break;
     case 'R':
       if (loc_key == "MESSAGE_ROUND") {
         return "MESSAGE_VIDEO_NOTE";
@@ -2845,6 +2868,9 @@ string NotificationManager::convert_loc_key(const string &loc_key) {
     case 'U':
       if (loc_key == "PINNED_AUDIO") {
         return "PINNED_MESSAGE_VOICE_NOTE";
+      }
+      if (loc_key == "PINNED_QUIZ") {
+        return "PINNED_MESSAGE_QUIZ";
       }
       if (loc_key == "CHAT_RETURNED") {
         return "MESSAGE_CHAT_ADD_MEMBERS_RETURNED";
@@ -2941,6 +2967,9 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
   if (!clean_input_string(loc_key)) {
     return Status::Error(PSLICE() << "Receive invalid loc_key " << format::escaped(loc_key));
   }
+  if (loc_key.empty()) {
+    return Status::Error("Receive empty loc_key");
+  }
   for (auto &loc_arg : loc_args) {
     if (!clean_input_string(loc_arg)) {
       return Status::Error(PSLICE() << "Receive invalid loc_arg " << format::escaped(loc_arg));
@@ -2992,11 +3021,17 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
     } else {
       LOG(ERROR) << "Receive unencrypted SESSION_REVOKE push notification";
     }
+    promise.set_value(Unit());
     return Status::OK();
   }
 
   if (loc_key == "LOCKED_MESSAGE") {
     return Status::Error(200, "Immediate success");
+  }
+
+  if (loc_key == "GEO_LIVE_PENDING") {
+    td_->messages_manager_->on_update_some_live_location_viewed(std::move(promise));
+    return Status::OK();
   }
 
   if (loc_key == "AUTH_REGION" || loc_key == "AUTH_UNKNOWN") {
@@ -3042,7 +3077,7 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
     return Status::Error("Can't find dialog_id");
   }
 
-  if (loc_key.empty()) {
+  if (loc_key == "READ_HISTORY") {
     if (dialog_id.get_type() == DialogType::SecretChat) {
       return Status::Error("Receive read history in a secret chat");
     }
@@ -3077,6 +3112,10 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
     td_->messages_manager_->remove_message_notifications_by_message_ids(dialog_id, message_ids);
     promise.set_value(Unit());
     return Status::OK();
+  }
+
+  if (loc_key == "MESSAGE_MUTED") {
+    return Status::Error(406, "Notifications about muted messages force loading data from the server");
   }
 
   TRY_RESULT(msg_id, get_json_object_int_field(custom, "msg_id"));
@@ -3135,12 +3174,12 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
   }
 
   if (begins_with(loc_key, "ENCRYPTION_")) {
-    // TODO new secret chat notifications
+    // TODO ENCRYPTION_REQUEST/ENCRYPTION_ACCEPT notifications
     return Status::Error(406, "New secret chat notification is not supported");
   }
 
   if (begins_with(loc_key, "PHONE_CALL_")) {
-    // TODO phone call request/missed notification
+    // TODO PHONE_CALL_REQUEST/PHONE_CALL_DECLINE/PHONE_CALL_MISSED notification
     return Status::Error(406, "Phone call notification is not supported");
   }
 
@@ -3191,8 +3230,7 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
     if (mtpeer.type() != JsonValue::Type::Null) {
       TRY_RESULT(ah, get_json_object_string_field(mtpeer.get_object(), "ah"));
       if (!ah.empty()) {
-        TRY_RESULT(sender_access_hash_safe, to_integer_safe<int64>(ah));
-        sender_access_hash = sender_access_hash_safe;
+        TRY_RESULT_ASSIGN(sender_access_hash, to_integer_safe<int64>(ah));
       }
       TRY_RESULT(ph, get_json_object_field(mtpeer.get_object(), "ph", JsonValue::Type::Object));
       if (ph.type() != JsonValue::Type::Null) {
@@ -3202,16 +3240,18 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
 
     int32 flags = telegram_api::user::FIRST_NAME_MASK | telegram_api::user::MIN_MASK;
     if (sender_access_hash != -1) {
-      flags |= telegram_api::user::ACCESS_HASH_MASK;
+      // set phone number flag to show that this is a full access hash
+      flags |= telegram_api::user::ACCESS_HASH_MASK | telegram_api::user::PHONE_MASK;
     }
     if (sender_photo != nullptr) {
       flags |= telegram_api::user::PHOTO_MASK;
     }
+    auto user_name = sender_user_id.get() == 136817688 ? "Channel" : sender_name;
     auto user = telegram_api::make_object<telegram_api::user>(
         flags, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
         false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-        false /*ignored*/, false /*ignored*/, sender_user_id.get(), sender_access_hash, sender_name, string(), string(),
-        string(), std::move(sender_photo), nullptr, 0, string(), string(), string());
+        false /*ignored*/, false /*ignored*/, false /*ignored*/, sender_user_id.get(), sender_access_hash, user_name,
+        string(), string(), string(), std::move(sender_photo), nullptr, 0, Auto(), string(), string());
     td_->contacts_manager_->on_get_user(std::move(user), "process_push_notification_payload");
   }
 
@@ -3350,11 +3390,12 @@ Status NotificationManager::process_push_notification_payload(string payload, bo
                                    std::move(arg), std::move(attached_photo), std::move(attached_document), 0,
                                    std::move(promise));
   } else {
+    bool is_from_scheduled = has_json_object_field(custom, "schedule");
     bool is_silent = has_json_object_field(custom, "silent");
     add_message_push_notification(dialog_id, MessageId(server_message_id), random_id, sender_user_id,
-                                  std::move(sender_name), sent_date, contains_mention, is_silent, std::move(loc_key),
-                                  std::move(arg), std::move(attached_photo), std::move(attached_document),
-                                  NotificationId(), 0, std::move(promise));
+                                  std::move(sender_name), sent_date, is_from_scheduled, contains_mention, is_silent,
+                                  is_silent, std::move(loc_key), std::move(arg), std::move(attached_photo),
+                                  std::move(attached_document), NotificationId(), 0, std::move(promise));
   }
   return Status::OK();
 }
@@ -3367,6 +3408,7 @@ class NotificationManager::AddMessagePushNotificationLogEvent {
   UserId sender_user_id_;
   string sender_name_;
   int32 date_;
+  bool is_from_scheduled_;
   bool contains_mention_;
   bool is_silent_;
   string loc_key_;
@@ -3394,6 +3436,7 @@ class NotificationManager::AddMessagePushNotificationLogEvent {
     STORE_FLAG(has_arg);
     STORE_FLAG(has_photo);
     STORE_FLAG(has_document);
+    STORE_FLAG(is_from_scheduled_);
     END_STORE_FLAGS();
     td::store(dialog_id_, storer);
     if (has_message_id) {
@@ -3441,6 +3484,7 @@ class NotificationManager::AddMessagePushNotificationLogEvent {
     PARSE_FLAG(has_arg);
     PARSE_FLAG(has_photo);
     PARSE_FLAG(has_document);
+    PARSE_FLAG(is_from_scheduled_);
     END_PARSE_FLAGS();
     td::parse(dialog_id_, parser);
     if (has_message_id) {
@@ -3474,15 +3518,14 @@ class NotificationManager::AddMessagePushNotificationLogEvent {
   }
 };
 
-void NotificationManager::add_message_push_notification(DialogId dialog_id, MessageId message_id, int64 random_id,
-                                                        UserId sender_user_id, string sender_name, int32 date,
-                                                        bool contains_mention, bool is_silent, string loc_key,
-                                                        string arg, Photo photo, Document document,
-                                                        NotificationId notification_id, uint64 logevent_id,
-                                                        Promise<Unit> promise) {
+void NotificationManager::add_message_push_notification(
+    DialogId dialog_id, MessageId message_id, int64 random_id, UserId sender_user_id, string sender_name, int32 date,
+    bool is_from_scheduled, bool contains_mention, bool initial_is_silent, bool is_silent, string loc_key, string arg,
+    Photo photo, Document document, NotificationId notification_id, uint64 logevent_id, Promise<Unit> promise) {
   auto is_pinned = begins_with(loc_key, "PINNED_");
   auto r_info = td_->messages_manager_->get_message_push_notification_info(
-      dialog_id, message_id, random_id, sender_user_id, date, contains_mention, is_pinned, logevent_id != 0);
+      dialog_id, message_id, random_id, sender_user_id, date, is_from_scheduled, contains_mention, is_pinned,
+      logevent_id != 0);
   if (r_info.is_error()) {
     VLOG(notifications) << "Don't need message push notification for " << message_id << "/" << random_id << " from "
                         << dialog_id << " sent by " << sender_user_id << " at " << date << ": " << r_info.error();
@@ -3527,18 +3570,20 @@ void NotificationManager::add_message_push_notification(DialogId dialog_id, Mess
 
   if (sender_user_id.is_valid() && !td_->contacts_manager_->have_user_force(sender_user_id)) {
     int32 flags = telegram_api::user::FIRST_NAME_MASK | telegram_api::user::MIN_MASK;
+    auto user_name = sender_user_id.get() == 136817688 ? "Channel" : sender_name;
     auto user = telegram_api::make_object<telegram_api::user>(
         flags, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
         false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-        false /*ignored*/, false /*ignored*/, sender_user_id.get(), 0, sender_name, string(), string(), string(),
-        nullptr, nullptr, 0, string(), string(), string());
+        false /*ignored*/, false /*ignored*/, false /*ignored*/, sender_user_id.get(), 0, user_name, string(), string(),
+        string(), nullptr, nullptr, 0, Auto(), string(), string());
     td_->contacts_manager_->on_get_user(std::move(user), "add_message_push_notification");
   }
 
   if (logevent_id == 0 && G()->parameters().use_message_db) {
     AddMessagePushNotificationLogEvent logevent{
-        dialog_id, message_id, random_id, sender_user_id, sender_name, date,           contains_mention,
-        is_silent, loc_key,    arg,       photo,          document,    notification_id};
+        dialog_id,         message_id,       random_id,         sender_user_id, sender_name, date,
+        is_from_scheduled, contains_mention, initial_is_silent, loc_key,        arg,         photo,
+        document,          notification_id};
     auto storer = LogEventStorerImpl<AddMessagePushNotificationLogEvent>(logevent);
     logevent_id = binlog_add(G()->td_db()->get_binlog(), LogEvent::HandlerType::AddMessagePushNotification, storer);
   }
@@ -3546,10 +3591,13 @@ void NotificationManager::add_message_push_notification(DialogId dialog_id, Mess
   auto group_id = info.group_id;
   CHECK(group_id.is_valid());
 
+  bool is_outgoing =
+      sender_user_id.is_valid() ? td_->contacts_manager_->get_my_id() == sender_user_id : is_from_scheduled;
   if (logevent_id != 0) {
     VLOG(notifications) << "Register temporary " << notification_id << " with logevent " << logevent_id;
     temporary_notification_logevent_ids_[notification_id] = logevent_id;
-    temporary_notifications_[FullMessageId(dialog_id, message_id)] = {group_id, notification_id, sender_user_id};
+    temporary_notifications_[FullMessageId(dialog_id, message_id)] = {group_id, notification_id, sender_user_id,
+                                                                      sender_name, is_outgoing};
     temporary_notification_message_ids_[notification_id] = FullMessageId(dialog_id, message_id);
   }
   push_notification_promises_[notification_id].push_back(std::move(promise));
@@ -3557,14 +3605,16 @@ void NotificationManager::add_message_push_notification(DialogId dialog_id, Mess
   auto group_type = info.group_type;
   auto settings_dialog_id = info.settings_dialog_id;
   VLOG(notifications) << "Add message push " << notification_id << " of type " << loc_key << " for " << message_id
-                      << "/" << random_id << " in " << dialog_id << ", sent by " << sender_user_id << " at " << date
-                      << " with arg " << arg << ", photo " << photo << " and document " << document << " to "
-                      << group_id << " of type " << group_type << " with settings from " << settings_dialog_id;
+                      << "/" << random_id << " in " << dialog_id << ", sent by " << sender_user_id << "/\""
+                      << sender_name << "\" at " << date << " with arg " << arg << ", photo " << photo
+                      << " and document " << document << " to " << group_id << " of type " << group_type
+                      << " with settings from " << settings_dialog_id;
 
-  add_notification(group_id, group_type, dialog_id, date, settings_dialog_id, is_silent, 0, notification_id,
-                   create_new_push_message_notification(sender_user_id, message_id, std::move(loc_key), std::move(arg),
-                                                        std::move(photo), std::move(document)),
-                   "add_message_push_notification");
+  add_notification(
+      group_id, group_type, dialog_id, date, settings_dialog_id, initial_is_silent, is_silent, 0, notification_id,
+      create_new_push_message_notification(sender_user_id, sender_name, is_outgoing, message_id, std::move(loc_key),
+                                           std::move(arg), std::move(photo), std::move(document)),
+      "add_message_push_notification");
 }
 
 class NotificationManager::EditMessagePushNotificationLogEvent {
@@ -3656,6 +3706,8 @@ void NotificationManager::edit_message_push_notification(DialogId dialog_id, Mes
   auto group_id = it->second.group_id;
   auto notification_id = it->second.notification_id;
   auto sender_user_id = it->second.sender_user_id;
+  auto sender_name = it->second.sender_name;
+  auto is_outgoing = it->second.is_outgoing;
   CHECK(group_id.is_valid());
   CHECK(notification_id.is_valid());
 
@@ -3680,9 +3732,10 @@ void NotificationManager::edit_message_push_notification(DialogId dialog_id, Mes
 
   push_notification_promises_[notification_id].push_back(std::move(promise));
 
-  edit_notification(group_id, notification_id,
-                    create_new_push_message_notification(sender_user_id, message_id, std::move(loc_key), std::move(arg),
-                                                         std::move(photo), std::move(document)));
+  edit_notification(
+      group_id, notification_id,
+      create_new_push_message_notification(sender_user_id, std::move(sender_name), is_outgoing, message_id,
+                                           std::move(loc_key), std::move(arg), std::move(photo), std::move(document)));
 }
 
 Result<int64> NotificationManager::get_push_receiver_id(string payload) {
@@ -4007,9 +4060,9 @@ void NotificationManager::on_binlog_events(vector<BinlogEvent> &&events) {
 
         add_message_push_notification(
             log_event.dialog_id_, log_event.message_id_, log_event.random_id_, log_event.sender_user_id_,
-            log_event.sender_name_, log_event.date_, log_event.contains_mention_, true, log_event.loc_key_,
-            log_event.arg_, log_event.photo_, log_event.document_, log_event.notification_id_, event.id_,
-            PromiseCreator::lambda([](Result<Unit> result) {
+            log_event.sender_name_, log_event.date_, log_event.is_from_scheduled_, log_event.contains_mention_,
+            log_event.is_silent_, true, log_event.loc_key_, log_event.arg_, log_event.photo_, log_event.document_,
+            log_event.notification_id_, event.id_, PromiseCreator::lambda([](Result<Unit> result) {
               if (result.is_error() && result.error().code() != 200 && result.error().code() != 406) {
                 LOG(ERROR) << "Receive error " << result.error() << ", while processing message push notification";
               }

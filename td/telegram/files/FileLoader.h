@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -61,6 +61,7 @@ class FileLoader : public FileLoaderActor {
     bool need_delay = false;
     int64 offset{0};
     int64 limit{0};
+    bool is_upload{false};
   };
   virtual Result<FileInfo> init() TD_WARN_UNUSED_RESULT = 0;
   virtual Status on_ok(int64 size) TD_WARN_UNUSED_RESULT = 0;
@@ -68,7 +69,8 @@ class FileLoader : public FileLoaderActor {
   virtual Status before_start_parts() {
     return Status::OK();
   }
-  virtual Result<std::pair<NetQueryPtr, bool>> start_part(Part part, int part_count) TD_WARN_UNUSED_RESULT = 0;
+  virtual Result<std::pair<NetQueryPtr, bool>> start_part(Part part, int part_count,
+                                                          int64 streaming_offset) TD_WARN_UNUSED_RESULT = 0;
   virtual void after_start_parts() {
   }
   virtual Result<size_t> process_part(Part part, NetQueryPtr net_query) TD_WARN_UNUSED_RESULT = 0;
@@ -85,14 +87,14 @@ class FileLoader : public FileLoaderActor {
   virtual Callback *get_callback() = 0;
   virtual Result<PrefixInfo> on_update_local_location(const LocalFileLocation &location,
                                                       int64 file_size) TD_WARN_UNUSED_RESULT {
-    return Status::Error("unsupported");
+    return Status::Error("Unsupported");
   }
   virtual Result<bool> should_restart_part(Part part, NetQueryPtr &net_query) TD_WARN_UNUSED_RESULT {
     return false;
   }
 
   virtual Status process_check_query(NetQueryPtr net_query) {
-    return Status::Error("unsupported");
+    return Status::Error("Unsupported");
   }
   struct CheckInfo {
     bool need_check{false};

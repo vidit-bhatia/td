@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -93,12 +93,22 @@ namespace TdExample
             else if (_authorizationState is TdApi.AuthorizationStateWaitPhoneNumber)
             {
                 string phoneNumber = ReadLine("Please enter phone number: ");
-                _client.Send(new TdApi.SetAuthenticationPhoneNumber(phoneNumber, false, false), new AuthorizationRequestHandler());
+                _client.Send(new TdApi.SetAuthenticationPhoneNumber(phoneNumber, null), new AuthorizationRequestHandler());
+            }
+            else if (_authorizationState is TdApi.AuthorizationStateWaitOtherDeviceConfirmation state)
+            {
+                Console.WriteLine("Please confirm this login link on another device: " + state.Link);
             }
             else if (_authorizationState is TdApi.AuthorizationStateWaitCode)
             {
                 string code = ReadLine("Please enter authentication code: ");
-                _client.Send(new TdApi.CheckAuthenticationCode(code, "", ""), new AuthorizationRequestHandler());
+                _client.Send(new TdApi.CheckAuthenticationCode(code), new AuthorizationRequestHandler());
+            }
+            else if (_authorizationState is TdApi.AuthorizationStateWaitRegistration)
+            {
+                string firstName = ReadLine("Please enter your first name: ");
+                string lastName = ReadLine("Please enter your last name: ");
+                _client.Send(new TdApi.RegisterUser(firstName, lastName), new AuthorizationRequestHandler());
             }
             else if (_authorizationState is TdApi.AuthorizationStateWaitPassword)
             {
@@ -200,7 +210,7 @@ namespace TdExample
             TdApi.ReplyMarkup replyMarkup = new TdApi.ReplyMarkupInlineKeyboard(new TdApi.InlineKeyboardButton[][] { row, row, row });
 
             TdApi.InputMessageContent content = new TdApi.InputMessageText(new TdApi.FormattedText(message, null), false, true);
-            _client.Send(new TdApi.SendMessage(chatId, 0, false, false, replyMarkup, content), _defaultHandler);
+            _client.Send(new TdApi.SendMessage(chatId, 0, null, replyMarkup, content), _defaultHandler);
         }
 
         static void Main()
@@ -225,7 +235,7 @@ namespace TdExample
                 _gotAuthorization.Reset();
                 _gotAuthorization.WaitOne();
 
-                _client.Send(new TdApi.GetChats(Int64.MaxValue, 0, 100), _defaultHandler); // preload chat list
+                _client.Send(new TdApi.GetChats(null, Int64.MaxValue, 0, 100), _defaultHandler); // preload main chat list
                 while (_haveAuthorization)
                 {
                     GetCommand();

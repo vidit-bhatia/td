@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -31,6 +31,7 @@ class IStreamTransport {
   virtual size_t max_prepend_size() const = 0;
   virtual size_t max_append_size() const = 0;
   virtual TransportType get_type() const = 0;
+  virtual bool use_random_padding() const = 0;
 };
 
 unique_ptr<IStreamTransport> create_transport(TransportType type);

@@ -1,3 +1,283 @@
+Changes in 1.6.0:
+
+* Added support for multiple chat lists. Currently, only two chat lists Main and Archive are supported:
+  - Added the class `ChatList`, which represents a chat list and could be `chatListMain` or `chatListArchive`.
+  - Added the field `chat_list` to the class `chat`, denoting the chat list to which the chat belongs.
+  - Added the parameter `chat_list` to the methods `getChats`, `searchMessages` and `setPinnedChats`.
+  - Added the field `chat_list` to the updates `updateUnreadMessageCount` and `updateUnreadChatCount`.
+  - Added the field `total_count` to the update `updateUnreadChatCount`, containing the total number of chats in
+    the list.
+  - Added the update `updateChatChatList`, which is sent after a chat is moved to or from a chat list.
+  - Added the method `setChatChatList`, which can be used to move a chat between chat lists.
+  - Added the option `pinned_archived_chat_count_max` for the maximum number of pinned chats in the Archive chat list.
+* Added support for scheduled messages:
+  - Added the classes `messageSchedulingStateSendAtDate` and `messageSchedulingStateSendWhenOnline`,
+    representing the scheduling state of a message.
+  - Added the field `scheduling_state` to the class `message`, which allows to distinguish between scheduled and
+    ordinary messages.
+  - The update `updateNewMessage` can now contain a scheduled message and must be handled appropriately.
+  - The updates `updateMessageContent`, `updateDeleteMessages`, `updateMessageViews`, `updateMessageSendSucceeded`,
+    `updateMessageSendFailed`, and `updateMessageSendAcknowledged` can now contain identifiers of scheduled messages.
+  - Added the class `sendMessageOptions`, which contains options for sending messages,
+    including the scheduling state of the messages.
+  - Replaced the parameters `disable_notification` and `from_background` in the methods `sendMessage`,
+    `sendMessageAlbum`, `sendInlineQueryResultMessage`, and `forwardMessages` with the new field `options` of
+    the type `sendMessageOptions`.
+  - Added the method `editMessageSchedulingState`, which can be used to reschedule a message or send it immediately.
+  - Added the method `getChatScheduledMessages`, which returns all scheduled messages in a chat.
+  - Added the field `has_scheduled_messages` to the class `chat`.
+  - Added the update `updateChatHasScheduledMessages`, which is sent whenever the field `has_scheduled_messages`
+    changes in a chat.
+  - Added support for reminders in Saved Messages and notifications about other sent scheduled messages in
+    the [Notification API](https://core.telegram.org/tdlib/notification-api/).
+* Added support for adding users without a known phone number to the list of contacts:
+  - Added the method `addContact` for adding or renaming contacts without a known phone number.
+  - Added the field `need_phone_number_privacy_exception` to the class `userFullInfo`, containing the default value for
+    the second parameter of the method `addContact`.
+  - Added the fields `is_contact` and `is_mutual_contact` to the class `user`.
+  - Removed the class `LinkState` and the fields `outgoing_link` and `incoming_link` from the class `user`.
+* Improved support for the top chat action bar:
+  - Added the class `ChatActionBar`, representing all possible types of the action bar.
+  - Added the field `action_bar` to the class `chat`.
+  - Removed the legacy class `chatReportSpamState`.
+  - Removed the legacy methods `getChatReportSpamState` and `changeChatReportSpamState`.
+  - Added the update `updateChatActionBar`.
+  - Added the method `removeChatActionBar`, which allows to dismiss the action bar.
+  - Added the method `sharePhoneNumber`, allowing to share the phone number of the current user with a mutual contact.
+  - Added the new reason `chatReportReasonUnrelatedLocation` for reporting location-based groups unrelated to
+    their stated location.
+* Improved support for text entities:
+  - Added the new types of text entities `textEntityTypeUnderline` and `textEntityTypeStrikethrough`.
+  - Added support for nested entities. Entities can be nested, but must not mutually intersect with each other.
+    Pre, Code and PreCode entities can't contain other entities. Bold, Italic, Underline and Strikethrough entities can
+    contain and be contained in all other entities. All other entities can't contain each other.
+  - Added the field `version` to the method `textParseModeMarkdown`. Versions 0 and 1 correspond to Bot API Markdown
+    parse mode, version 2 to Bot API MarkdownV2 parse mode with underline, strikethrough and nested entities support.
+  - The new entity types and nested entities are supported in secret chats also if its layer is at least 101.
+* Added support for native non-anonymous, multiple answer, and quiz-style polls:
+  - Added support for quiz-style polls, which has exactly one correct answer option and can be answered only once.
+  - Added support for regular polls, which allows multiple answers.
+  - Added the classes `pollTypeRegular` and `pollTypeQuiz`, representing the possible types of a poll.
+  - Added the field `type` to the classes `poll` and `inputMessagePoll`.
+  - Added support for non-anonymous polls with visible votes by adding the field `is_anonymous` to the classes `poll`
+    and `inputMessagePoll`.
+  - Added the method `getPollVoters`, returning users that voted for the specified option in a non-anonymous poll.
+  - Added the new reply markup keyboard button `keyboardButtonTypeRequestPoll`.
+  - Added the field `is_regular` to the class `pushMessageContentPoll`.
+  - Added the update `updatePollAnswer` for bots only.
+  - Added the field `is_closed` to the class `inputMessagePoll`, which can be used by bots to send a closed poll.
+* Clarified in the documentation that file remote ID is guaranteed to be usable only if the corresponding file is
+  still accessible to the user and is known to TDLib. For example, if the file is from a message, then the message
+  must be not deleted and accessible to the user. If the file database is disabled, then the corresponding object with
+  the file must be preloaded by the client.
+* Added support for administrator custom titles:
+  - Added the field `custom_title` to `chatMemberStatusCreator` and `chatMemberStatusAdministrator` classes.
+  - Added the classes `chatAdministrator` and `chatAdministrators`, containing user identifiers along with
+    their custom administrator title and owner status.
+  - Replaced the result type of the method `getChatAdministrators` with `chatAdministrators`.
+* Improved Instant View support:
+  - Added the new web page block `pageBlockVoiceNote`.
+  - Changed value of invisible cells in `pageBlockTableCell` to null.
+  - Added the field `is_cached` to the class `richTextUrl`.
+* Improved support for chat backgrounds:
+  - Added the classes `backgroundFillSolid` for solid color backgrounds and `backgroundFillGradient` for
+    gradient backgrounds.
+  - Added support for TGV (gzipped subset of SVG with MIME type "application/x-tgwallpattern") background patterns
+    in addition to PNG patterns. Background pattern thumbnails are still always in PNG format.
+  - Replaced the field `color` in the class `backgroundTypePattern` with the field `fill` of type `BackgroundFill`.
+  - Replaced the class `backgroundTypeSolid` with the class `backgroundTypeFill`.
+* Added support for discussion groups for channel chats:
+  - Added the field `linked_chat_id` to the class `supergroupFullInfo` containing the identifier of a discussion
+    supergroup for the channel, or a channel, for which the supergroup is the designated discussion supergroup.
+  - Added the field `has_linked_chat` to the class `supergroup`.
+  - Added the method `getSuitableDiscussionChats`, which returns a list of chats which can be assigned as
+    a discussion group for a channel by the current user.
+  - Added the method `setChatDiscussionGroup`, which can be used to add or remove a discussion group from a channel.
+  - Added the class `chatEventLinkedChatChanged` representing a change of the linked chat in the chat event log.
+* Added support for slow mode in supergroups:
+  - Added the field `is_slow_mode_enabled` to the class `supergroup`.
+  - Added the field `slow_mode_delay` to the class `supergroupFullInfo`.
+  - Added the method `setChatSlowModeDelay`, which can be used to change the slow mode delay setting in a supergroup.
+  - Added the class `chatEventSlowModeDelayChanged` representing a change of the slow mode delay setting in
+    the chat event log.
+* Improved privacy settings support:
+  - Added the classes `userPrivacySettingRuleAllowChatMembers` and `userPrivacySettingRuleRestrictChatMembers`
+    to include or exclude all group members in a privacy setting rule.
+  - Added the class `userPrivacySettingShowPhoneNumber` for managing the visibility of the user's phone number.
+  - Added the class `userPrivacySettingAllowFindingByPhoneNumber` for managing whether the user can be found by
+    their phone number.
+* Added the method `checkCreatedPublicChatsLimit` for checking whether the maximum number of owned public chats
+  has been reached.
+* Added support for transferring ownership of supergroup and channel chats:
+  - Added the method `transferChatOwnership`.
+  - Added the class `CanTransferOwnershipResult` and the method `canTransferOwnership` for checking
+    whether chat ownership can be transferred from the current session.
+* Added support for location-based supergroups:
+  - Added the class `chatLocation`, which contains the location to which the supergroup is connected.
+  - Added the field `has_location` to the class `supergroup`.
+  - Added the field `location` to the class `supergroupFullInfo`.
+  - Added the ability to create location-based supergroups via the new field `location` in
+    the method `createNewSupergroupChat`.
+  - Added the method `setChatLocation`, which allows to change location of location-based supergroups.
+  - Added the field `can_set_location` to the class `supergroupFullInfo`.
+  - Added the class `PublicChatType`, which can be one of `publicChatTypeHasUsername` or
+    `publicChatTypeIsLocationBased`.
+  - Added the parameter `type` to the method `getCreatedPublicChats`, which allows to get location-based supergroups
+    owned by the user.
+  - Supported location-based supergroups as public chats where appropriate.
+  - Added the class `chatEventLocationChanged` representing a change of the location of a chat in the chat event log.
+* Added support for searching chats and users nearby:
+  - Added the classes `chatNearby` and `chatsNearby`, containing information about chats along with
+    the distance to them.
+  - Added the method `searchChatsNearby`, which returns chats and users nearby.
+  - Added the update `updateUsersNearby`, which is sent 60 seconds after a successful `searchChatsNearby` request.
+* Improved support for inline keyboard buttons of the type `inlineKeyboardButtonTypeLoginUrl`:
+  - Added the class `LoginUrlInfo` and the method `getLoginUrlInfo`, which allows to get information about
+    an inline button of the type `inlineKeyboardButtonTypeLoginUrl`.
+  - Added the method `getLoginUrl` for automatic authorization on the target website.
+* Improved support for content restrictions:
+  - The field `restriction_reason` in the classes `user` and `channel` now contains only a human-readable description
+    why access must be restricted. It is non-empty if and only if access to the chat needs to be restricted.
+  - Added the field `restriction_reason` to the class `message`. It is non-empty if and only if access to the message
+    needs to be restricted.
+  - Added the writable option `ignore_platform_restrictions`, which can be set in non-store apps to ignore restrictions
+    specific to the currently used operating system.
+  - Added the writable option `ignore_sensitive_content_restrictions`, which can be set to show sensitive content on
+    all user devices. `getOption("ignore_sensitive_content_restrictions")` can be used to fetch the actual value of
+    the option, the option will not be immediately updated after a change from another device.
+  - Added the read-only option `can_ignore_sensitive_content_restrictions`, which can be used to check, whether
+    the option `ignore_sensitive_content_restrictions` can be changed.
+* Added support for QR code authentication for already registered users:
+  - Added the authorization state `authorizationStateWaitOtherDeviceConfirmation`.
+  - Added the method `requestQrCodeAuthentication`, which can be used in the `authorizationStateWaitPhoneNumber` state
+    instead of the method `setAuthenticationPhoneNumber` to request QR code authentication.
+  - Added the method `confirmQrCodeAuthentication` for authentication confirmation from another device.
+* Added the update `updateMessageLiveLocationViewed`, which is supposed to trigger an edit of the corresponding
+  live location.
+* Added the parameter `input_language_code` to the method `searchEmojis`.
+* Added the method `getInactiveSupergroupChats`, to be used when the user receives a CHANNELS_TOO_MUCH error after
+  reaching the limit on the number of joined supergroup and channel chats.
+* Added the field `unique_id` to the class `remoteFile`, which can be used to identify the same file for
+  different users.
+* Added the new category of top chat list `topChatCategoryForwardChats`.
+* Added the read-only option `animated_emoji_sticker_set_name`, containing name of a sticker set with animated emojis.
+* Added the read-only option `unix_time`, containing an estimation of the current Unix timestamp.
+  The option will not be updated automatically unless the difference between the previous estimation and
+  the locally available monotonic clocks changes significantly.
+* Added the field `is_silent` to the class `notification`, so silent notifications can be shown with
+  the appropriate mark.
+* Added the field `video_upload_bitrate` to the class `autoDownloadSettings`.
+* Disallowed to call `setChatNotificationSettings` method on the chat with self, which never worked.
+* Added support for `ton://` URLs in messages and inline keyboard buttons.
+
+-----------------------------------------------------------------------------------------------------------------------
+
+Changes in 1.5.0:
+
+* Changed authorization workflow:
+  - Added the state `authorizationStateWaitRegistration`, which will be received after `authorizationStateWaitCode` for
+    users who are not registered yet.
+  - Added the method `registerUser`, which must be used in the `authorizationStateWaitRegistration` state to finish
+    registration of the user.
+  - Removed the fields `is_registered` and `terms_of_service` from the class `authorizationStateWaitCode`.
+  - Removed the parameters `first_name` and `last_name` from the method `checkAuthenticationCode`.
+* Added support for messages with an unknown sender (zero `sender_user_id`) in private chats, basic groups and
+  supergroups. Currently, the sender is unknown for posts in channels and for channel posts automatically forwarded to
+  the discussion group.
+* Added support for the new permission system for non-administrator users in groups:
+  - Added the class `chatPermissions` containing all supported permissions, including new permissions `can_send_polls`,
+    `can_change_info`, `can_invite_users` and `can_pin_messages`.
+  - Added the field `permissions` to the class `chat`, describing actions that non-administrator chat members are
+    allowed to take in the chat.
+  - Added the update `updateChatPermissions`.
+  - Added the method `setChatPermissions` for changing chat permissions.
+  - Added the class `chatEventPermissionsChanged` representing a change of chat permissions in the chat event log.
+  - Replaced the fields `can_send_messages`, `can_send_media_messages`, `can_send_other_messages`,
+    `can_add_web_page_previews` in the class `chatMemberStatusRestricted` with the field `permissions` of
+    the type `chatPermissions`.
+  - Removed the field `everyone_is_administrator` from the `basicGroup` class in favor of the field `permissions` of
+    the class `chat`.
+  - Removed the field `anyone_can_invite` from the `supergroup` class in favor of the field `permissions` of
+    the class `chat`.
+  - Removed the method `toggleBasicGroupAdministrators` in favor of `setChatPermissions`.
+  - Removed the method `toggleSupergroupInvites` in favor of `setChatPermissions`.
+  - Renamed the field `anyone_can_invite` to `can_invite_users` in the class `chatEventInvitesToggled`.
+  - The permissions `can_send_other_messages` and `can_add_web_page_previews` now imply only `can_send_messages`
+    instead of `can_send_media_messages`.
+  - Allowed administrators in basic groups to use the method `generateChatInviteLink`.
+* Added out of the box `OpenBSD` and `NetBSD` operating systems support.
+* Added possibility to use `LibreSSL` >= 2.7.0 instead of `OpenSSL` to build TDLib.
+* Added instructions for building TDLib on `Debian 10`, `OpenBSD` and `NetBSD` to
+  the [TDLib build instructions generator](https://tdlib.github.io/td/build.html).
+* Added support for Backgrounds 2.0:
+  - Added the classes `BackgroundType`, `background`, `backgrounds` and `InputBackground`.
+  - Added the method `getBackground` returning the list of backgrounds installed by the user.
+  - Added the method `setBackground` for changing the background selected by the user.
+  - Added the update `updateSelectedBackground`, which is sent right after a successful initialization and whenever
+    the selected background changes.
+  - Added the method `removeBackground` for removing a background from the list of installed backgrounds.
+  - Added the method `resetBackgrounds` for restoring the default list of installed backgrounds.
+  - Added the method `searchBackground` returning a background by its name.
+  - Added the method `getBackgroundUrl` returning a persistent URL for a background.
+  - Removed the `getWallpapers` method.
+  - Removed the `wallpaper` and the `wallpapers` classes.
+  - The class `fileTypeWallpaper` can be used for remote file identifiers of both old wallpapers and new backgrounds.
+* Added support for descriptions in basic groups:
+  - Added the field `description` to the class `basicGroupFullInfo`.
+  - Replaced the method `setSupergroupDescription` with `setChatDescription` which can be used for any chat type.
+* Added support for emoji suggestions:
+  - Added the method `searchEmojis` for searching emojis by keywords.
+  - Added the method `getEmojiSuggestionsUrl`, which can be used to automatically log in to the translation platform
+    and suggest new emoji replacements.
+  - Renamed the class `stickerEmojis` to `emojis`.
+* Changed type of the fields `old_photo` and `new_photo` in the class `chatEventPhotoChanged` from `chatPhoto` to
+  `photo`.
+* Changed recommended size for `inputThumbnail` from 90x90 to 320x320.
+* Combined all supported settings for phone number authentication:
+  - Added the class `phoneNumberAuthenticationSettings` which contains all the settings.
+  - Replaced the parameters `is_current_phone_number` and `allow_flash_call` in the methods
+    `setAuthenticationPhoneNumber`, `sendPhoneNumberConfirmationCode`, `sendPhoneNumberVerificationCode` and
+    `changePhoneNumber` with the parameter `settings` of the type `phoneNumberAuthenticationSettings`.
+  - Added support for automatic SMS code verification for official applications via the new field `allow_app_hash` in
+    the class `phoneNumberAuthenticationSettings`.
+* Added support for auto-download settings presets.
+  - Added the classes `autoDownloadSettings` and `autoDownloadSettingsPresets`.
+  - Added the method `getAutoDownloadSettingsPresets` for getting the settings.
+  - Added the method `setAutoDownloadSettings`, which needs to be called whenever the user changes the settings.
+* Added support for minithumbnails - thumbnail images of a very poor quality and low resolution:
+  - Added the class `minithumbnail`.
+  - Added the field `minithumbnail` to `animation`, `document`, `photo`, `video` and `videoNote` classes.
+  - Added the field `audio_cover_minithumbnail` to the class `audio`.
+* Added support for resending messages which failed to send:
+  - Added the fields `error_code`, `error_message`, `can_retry` and `retry_after` to
+    the `messageSendingStateFailed` object.
+  - Added the method `resendMessages`.
+* Added the field `is_animated` to the `sticker`, `stickerSet` and `stickerSetInfo` classes.
+  Animated stickers can be received anywhere where non-animated stickers can appear.
+* Added the parameters `send_copy` and `remove_caption` to the `forwardMessages` method to allow forwarding of
+  messages without links to the originals.
+* Added the fields `send_copy` and `remove_caption` to `inputMessageForwarded` method to allow forwarding of
+  a message without link to the original message.
+* Added the method `getMessageLinkInfo` for getting information about a link to a message in a chat.
+* Added the class `userPrivacySettingShowProfilePhoto` for managing visibility of the user's profile photo.
+* Added the class `userPrivacySettingShowLinkInForwardedMessages` for managing whether a link to the user's account is
+  included with forwarded messages.
+* Added the field `thumbnail` to the classes `stickerSet` and `stickerSetInfo`, containing a thumbnail for
+  the sticker set.
+* Added the field `is_scam` to the classes `user` and `supergroup`.
+* Added a new kind of inline keyboard button `inlineKeyboardButtonTypeLoginUrl`, which for the moment must be processed
+  in the same way as an `inlineKeyboardButtonTypeUrl`.
+* Added the new class `supergroupMembersFilterContacts`, allowing to only search for contacts
+  in `getSupergroupMembers`.
+* Added the new class `chatMembersFilterContacts`, allowing to only search for contacts in `searchChatMembers`.
+* Added the class `chatEventPollStopped` representing the closing of a poll in a message in the chat event log.
+* Added ability to specify the exact types of problems with a call in the method `sendCallRating` and
+  the new class `CallProblem`.
+* Changes in [tdweb](https://github.com/tdlib/td/blob/master/example/web/):
+  - Supported non-zero `offset` and `limit` in `readFilePart`.
+
+-----------------------------------------------------------------------------------------------------------------------
+
 Changes in 1.4.0:
 
 * Added a [TDLib build instructions generator](https://tdlib.github.io/td/build.html), covering in details
@@ -65,7 +345,7 @@ Changes in 1.4.0:
   - Added the separate notification scope `notificationSettingsScopeChannelChats` for channel chats.
 * Added support for pinned notifications in basic groups and Saved Messages:
   - Added the field `pinned_message_id` to the class `chat`.
-  - Removed the field `pinned_message_id` from the class `supergroupFullInfo` in favor of `Chat.pinned_message_id`.
+  - Removed the field `pinned_message_id` from the class `supergroupFullInfo` in favor of `chat.pinned_message_id`.
   - Added the update `updateChatPinnedMessage`.
   - The right `can_pin_messages` is now applicable to both basic groups and supergroups.
   - Replaced the method `pinSupergroupMessage` with `pinChatMessage` which can be used for any chat type.
@@ -101,7 +381,7 @@ Changes in 1.4.0:
     `pageBlockTableCell`.
   - Added new block types `pageBlockKicker`, `pageBlockRelatedArticles`, `pageBlockTable`, `pageBlockDetails` and
     `pageBlockMap`.
-  - Added the flag `is_rtl` to `webPageInstantView` object.
+  - Added the flag `is_rtl` to the class `webPageInstantView`.
   - Renamed the field `caption` in classes `pageBlockBlockQuote` and `pageBlockPullQuote` to `credit`.
   - Dimensions in `pageBlockEmbedded` can now be unknown.
   - Added the field `url` to `pageBlockPhoto` which contains a URL that needs to be opened when the photo is clicked.
@@ -139,10 +419,10 @@ Changes in 1.4.0:
 * Added the update `updateChatOnlineMemberCount` which is automatically sent for open group chats if the number of
   online members in a group changes.
 * Added support for custom language packs downloaded from the server:
-  - Added the fields `base_language_pack_id`` to the `languagePackInfo` object. Strings from the base language pack
+  - Added the fields `base_language_pack_id`` to the class `languagePackInfo`. Strings from the base language pack
     must be used for untranslated keys from the chosen language pack.
   - Added the fields `plural_code`, `is_official`, `is_rtl`, `is_beta`, `is_installed`, `total_string_count`,
-    `translated_string_count`, `translation_url` to the `languagePackInfo` object.
+    `translated_string_count`, `translation_url` to the class `languagePackInfo`.
   - Added the method `addCustomServerLanguagePack` which adds a custom server language pack to the list of
     installed language packs.
   - Added the method `getLanguagePackInfo` which can be used for handling `https://t.me/setlanguage/...` links.
@@ -210,7 +490,7 @@ Changes in 1.4.0:
   It can now be used to dynamically discover available methods.
 * Added the ability to delete incoming messages in private chats and revoke messages without a time limit:
   - Added the parameter `revoke` to the method `deleteChatHistory`; use it to delete chat history for all chat members.
-  - Added the fields `can_be_deleted_only_for_self` and `can_be_deleted_for_all_users` to `Chat` object
+  - Added the fields `can_be_deleted_only_for_self` and `can_be_deleted_for_all_users` to the class `chat`
     which can be used to determine for whom the chat can be deleted through the `deleteChatHistory` method.
   - The fields `Message.can_be_deleted_only_for_self` and `Message.can_be_deleted_for_all_users` can still be used
     to determine for whom the message can be deleted through the `deleteMessages` method.
@@ -419,7 +699,7 @@ Changes in 1.2.0:
 * Added new message content type `messageWebsiteConnected`.
 * Added new text entity types `textEntityTypeCashtag` and `textEntityTypePhoneNumber`.
 * Added new update `updateUnreadMessageCount`, enabled when message database is used.
-* Method `joinChatByInviteLink` now returns the joined `Chat`.
+* Method `joinChatByInviteLink` now returns the joined `chat`.
 * Method `getWebPagePreview` now accepts `formattedText` instead of plain `string`.
 * Added field `phone_number` to `authenticationCodeInfo`, which contains a phone number that is being authenticated.
 * Added field `is_secret` to `messageAnimation`, `messagePhoto`, `messageVideo` and `messageVideoNote` classes,
@@ -480,9 +760,9 @@ Changes in 1.1.0:
 * Added parameter `as_album` to method `getPublicMessageLink` to enable getting public links for media albums.
 * Added field `html` to class `publicMessageLink`, containing HTML-code for message/message album embedding.
 * Added parameter `only_if_pending` to method `cancelDownloadFile` to allow keeping already started downloads.
-* Methods `createPrivateChat`, `createBasciGroupChat`, `createSupergroupChat` and `createSecretChat`
-  can now be called without a prior call to `getUser`/`getBasicGroup`/`getSupergorup`/`getSecretChat`.
-* Added parameter `force` to methods `createPrivateChat`, `createBasciGroupChat` and `createSupergroupChat` to allow
+* Methods `createPrivateChat`, `createBasicGroupChat`, `createSupergroupChat` and `createSecretChat`
+  can now be called without a prior call to `getUser`/`getBasicGroup`/`getSupergroup`/`getSecretChat`.
+* Added parameter `force` to methods `createPrivateChat`, `createBasicGroupChat` and `createSupergroupChat` to allow
   creating a chat without network requests.
 * Numerous optimizations and bug fixes.
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -10,7 +10,6 @@
 #include "td/telegram/Global.h"
 #include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/misc.h"
-#include "td/telegram/net/DcId.h"
 #include "td/telegram/net/NetQueryDispatcher.h"
 #include "td/telegram/Td.h"
 
@@ -19,6 +18,7 @@
 #include "td/telegram/td_api.hpp"
 #include "td/telegram/telegram_api.h"
 
+#include "td/db/DbKey.h"
 #include "td/db/SqliteDb.h"
 #include "td/db/SqliteKeyValue.h"
 
@@ -207,6 +207,7 @@ void LanguagePackManager::start_up() {
     if (language->version_ == -1) {
       load_empty_language_pack(language_code_);
     }
+    repair_chosen_language_info();
 
     std::lock_guard<std::mutex> language_lock(language->mutex_);
     base_language_code_ = language->base_language_code_;
@@ -235,6 +236,51 @@ void LanguagePackManager::tear_down() {
     // LOG(INFO) << "Clear language packs";
     // language_databases_.clear();
   }
+}
+
+vector<string> LanguagePackManager::get_used_language_codes() {
+  if (language_pack_.empty() || language_code_.empty()) {
+    return {};
+  }
+
+  std::lock_guard<std::mutex> packs_lock(database_->mutex_);
+  auto pack_it = database_->language_packs_.find(language_pack_);
+  CHECK(pack_it != database_->language_packs_.end());
+
+  LanguageInfo *info = nullptr;
+  LanguagePack *pack = pack_it->second.get();
+  std::lock_guard<std::mutex> languages_lock(pack->mutex_);
+  if (is_custom_language_code(language_code_)) {
+    auto custom_it = pack->custom_language_pack_infos_.find(language_code_);
+    if (custom_it != pack->custom_language_pack_infos_.end()) {
+      info = &custom_it->second;
+    }
+  } else {
+    for (auto &server_info : pack->server_language_pack_infos_) {
+      if (server_info.first == language_code_) {
+        info = &server_info.second;
+      }
+    }
+  }
+
+  vector<string> result;
+  if (language_code_.size() <= 2) {
+    result.push_back(language_code_);
+  }
+  if (info == nullptr) {
+    LOG(ERROR) << "Failed to find information about chosen language " << language_code_;
+    if (!is_custom_language_code(language_code_)) {
+      search_language_info(language_code_, Auto());
+    }
+  } else {
+    if (!info->base_language_code_.empty()) {
+      result.push_back(info->base_language_code_);
+    }
+    if (!info->plural_code_.empty()) {
+      result.push_back(info->plural_code_);
+    }
+  }
+  return result;
 }
 
 void LanguagePackManager::on_language_pack_changed() {
@@ -336,9 +382,8 @@ void LanguagePackManager::send_language_get_difference_query(Language *language,
                      std::move(language_code), result->version_, true, vector<string>(), std::move(result->strings_),
                      Promise<td_api::object_ptr<td_api::languagePackStrings>>());
       });
-  send_with_promise(G()->net_query_creator().create(
-                        create_storer(telegram_api::langpack_getDifference(language_pack_, language_code, version)),
-                        DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::Off),
+  send_with_promise(G()->net_query_creator().create_unauth(
+                        telegram_api::langpack_getDifference(language_pack_, language_code, version)),
                     std::move(request_promise));
 }
 
@@ -397,6 +442,7 @@ void LanguagePackManager::inc_generation() {
     CHECK(check_language_code_name(language_code_));
     auto language = add_language(database_, language_pack_, language_code_);
     on_language_pack_version_changed(false, std::numeric_limits<int32>::max());
+    repair_chosen_language_info();
 
     {
       std::lock_guard<std::mutex> lock(language->mutex_);
@@ -750,8 +796,7 @@ void LanguagePackManager::get_languages(bool only_local,
     send_closure(actor_id, &LanguagePackManager::on_get_languages, r_result.move_as_ok(), std::move(language_pack),
                  false, std::move(promise));
   });
-  send_with_promise(G()->net_query_creator().create(create_storer(telegram_api::langpack_getLanguages(language_pack_)),
-                                                    DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::Off),
+  send_with_promise(G()->net_query_creator().create_unauth(telegram_api::langpack_getLanguages(language_pack_)),
                     std::move(request_promise));
 }
 
@@ -773,9 +818,30 @@ void LanguagePackManager::search_language_info(string language_code,
                      std::move(language_code), std::move(promise));
       });
   send_with_promise(
-      G()->net_query_creator().create(create_storer(telegram_api::langpack_getLanguage(language_pack_, language_code)),
-                                      DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::Off),
+      G()->net_query_creator().create_unauth(telegram_api::langpack_getLanguage(language_pack_, language_code)),
       std::move(request_promise));
+}
+
+void LanguagePackManager::repair_chosen_language_info() {
+  CHECK(!language_pack_.empty() && !language_code_.empty());
+  if (is_custom_language_code(language_code_)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> packs_lock(database_->mutex_);
+  auto pack_it = database_->language_packs_.find(language_pack_);
+  CHECK(pack_it != database_->language_packs_.end());
+
+  LanguagePack *pack = pack_it->second.get();
+  std::lock_guard<std::mutex> languages_lock(pack->mutex_);
+  for (auto &server_info : pack->server_language_pack_infos_) {
+    if (server_info.first == language_code_) {
+      return;
+    }
+  }
+
+  LOG(INFO) << "Repair info about language " << language_code_;
+  search_language_info(language_code_, Auto());
 }
 
 td_api::object_ptr<td_api::languagePackInfo> LanguagePackManager::get_language_pack_info_object(
@@ -990,8 +1056,8 @@ void LanguagePackManager::get_language_pack_strings(string language_code, vector
     auto result_promise =
         PromiseCreator::lambda([actor_id = actor_id(this), language_pack = language_pack_, language_code](
                                    Result<td_api::object_ptr<td_api::languagePackStrings>> r_strings) mutable {
-          send_closure(actor_id, &LanguagePackManager::on_get_all_language_pack_strings, language_pack, language_code,
-                       std::move(r_strings));
+          send_closure(actor_id, &LanguagePackManager::on_get_all_language_pack_strings, std::move(language_pack),
+                       std::move(language_code), std::move(r_strings));
         });
     auto request_promise =
         PromiseCreator::lambda([actor_id = actor_id(this), language_pack = language_pack_, language_code,
@@ -1012,10 +1078,9 @@ void LanguagePackManager::get_language_pack_strings(string language_code, vector
                        std::move(language_code), result->version_, false, vector<string>(), std::move(result->strings_),
                        std::move(promise));
         });
-    send_with_promise(G()->net_query_creator().create(
-                          create_storer(telegram_api::langpack_getLangPack(language_pack_, language_code)),
-                          DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::Off),
-                      std::move(request_promise));
+    send_with_promise(
+        G()->net_query_creator().create_unauth(telegram_api::langpack_getLangPack(language_pack_, language_code)),
+        std::move(request_promise));
   } else {
     auto request_promise =
         PromiseCreator::lambda([actor_id = actor_id(this), language_pack = language_pack_, language_code, keys,
@@ -1028,9 +1093,8 @@ void LanguagePackManager::get_language_pack_strings(string language_code, vector
           send_closure(actor_id, &LanguagePackManager::on_get_language_pack_strings, std::move(language_pack),
                        std::move(language_code), -1, false, std::move(keys), r_result.move_as_ok(), std::move(promise));
         });
-    send_with_promise(G()->net_query_creator().create(create_storer(telegram_api::langpack_getStrings(
-                                                          language_pack_, language_code, std::move(keys))),
-                                                      DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::Off),
+    send_with_promise(G()->net_query_creator().create_unauth(
+                          telegram_api::langpack_getStrings(language_pack_, language_code, std::move(keys))),
                       std::move(request_promise));
   }
 }

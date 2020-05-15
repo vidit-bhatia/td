@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -66,11 +66,17 @@ TEST(StringCleaning, clean_input_string) {
   check_clean_input_string(
       "\xe2\x80\xa7\xe2\x80\xa8\xe2\x80\xa9\xe2\x80\xaa\xe2\x80\xab\xe2\x80\xac\xe2\x80\xad\xe2\x80\xae\xe2\x80\xaf",
       "\xe2\x80\xa7\xe2\x80\xaf", true);
+  check_clean_input_string(
+      "\xe2\x80\x8f\xe2\x80\x8f  \xe2\x80\x8e\xe2\x80\x8e\xe2\x80\x8e\xe2\x80\x8c \xe2\x80\x8f\xe2\x80\x8e "
+      "\xe2\x80\x8f",
+      "\xe2\x80\x8c\xe2\x80\x8f  \xe2\x80\x8c\xe2\x80\x8c\xe2\x80\x8e\xe2\x80\x8c \xe2\x80\x8c\xe2\x80\x8e "
+      "\xe2\x80\x8f",
+      true);
   check_clean_input_string("\xcc\xb3\xcc\xbf\xcc\x8a", "", true);
 }
 
-static void check_strip_empty_characters(string str, size_t max_length, string expected) {
-  ASSERT_EQ(expected, strip_empty_characters(str, max_length));
+static void check_strip_empty_characters(string str, size_t max_length, string expected, bool strip_rtlo = false) {
+  ASSERT_EQ(expected, strip_empty_characters(str, max_length, strip_rtlo));
 }
 
 TEST(StringCleaning, strip_empty_characters) {
@@ -79,12 +85,17 @@ TEST(StringCleaning, strip_empty_characters) {
   check_strip_empty_characters("/abc", 0, "");
   check_strip_empty_characters("/abc", 10000000, "/abc");
   string spaces =
-      u8"\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u202F\u205F\u3000\uFEFF"
-      u8"\uFFFC\uFFFC";
-  string spaces_replace = "                    ";
-  string empty = "\xE2\x80\x8C\xE2\x80\x8D\xE2\x80\xAE\xC2\xA0\xC2\xA0";
+      u8"\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u2800\u3000\uFFFC"
+      u8"\uFFFC";
+  string spaces_replace = "                   ";
+  string rtlo = u8"\u202E";
+  string empty = "\xE2\x80\x8B\xE2\x80\x8C\xE2\x80\x8D\xE2\x80\x8E\xE2\x80\x8F\xE2\x80\xAE\xC2\xA0\xC2\xA0";
 
   check_strip_empty_characters(spaces, 1000000, "");
+  check_strip_empty_characters(spaces + rtlo, 1000000, "");
+  check_strip_empty_characters(spaces + rtlo, 1000000, "", true);
+  check_strip_empty_characters(spaces + rtlo + "a", 1000000, rtlo + "a");
+  check_strip_empty_characters(spaces + rtlo + "a", 1000000, "a", true);
   check_strip_empty_characters(empty, 1000000, "");
   check_strip_empty_characters(empty + "a", 1000000, empty + "a");
   check_strip_empty_characters(spaces + empty + spaces + "abc" + spaces, 1000000, empty + spaces_replace + "abc");

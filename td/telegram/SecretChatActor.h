@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -18,6 +18,7 @@
 #include "td/telegram/DhConfig.h"
 #include "td/telegram/logevent/SecretChatEvent.h"
 #include "td/telegram/MessageId.h"
+#include "td/telegram/net/NetQuery.h"
 #include "td/telegram/SecretChatDb.h"
 #include "td/telegram/SecretChatId.h"
 #include "td/telegram/UserId.h"
@@ -48,7 +49,13 @@ class NetQueryCreator;
 class SecretChatActor : public NetQueryCallback {
  public:
   // do not change DEFAULT_LAYER, unless all it's usages are fixed
-  enum : int32 { DEFAULT_LAYER = 46, VIDEO_NOTES_LAYER = 66, MTPROTO_2_LAYER = 73, MY_LAYER = MTPROTO_2_LAYER };
+  enum : int32 {
+    DEFAULT_LAYER = 46,
+    VIDEO_NOTES_LAYER = 66,
+    MTPROTO_2_LAYER = 73,
+    NEW_ENTITIES_LAYER = 101,
+    MY_LAYER = NEW_ENTITIES_LAYER
+  };
 
   class Context {
    public:
@@ -209,7 +216,7 @@ class SecretChatActor : public NetQueryCallback {
         my_layer = parser.fetch_int();
         // for future usage
         BEGIN_PARSE_FLAGS();
-        END_PARSE_FLAGS_GENERIC();
+        END_PARSE_FLAGS();
       }
     }
 
@@ -582,6 +589,9 @@ class SecretChatActor : public NetQueryCallback {
   NetQueryRef read_history_query_;
   int32 last_read_history_date_ = -1;
   Promise<Unit> read_history_promise_;
+
+  template <class T>
+  NetQueryPtr create_net_query(QueryType type, const T &function);
 
   enum SendFlag : int32 {
     None = 0,

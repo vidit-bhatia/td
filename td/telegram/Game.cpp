@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -35,8 +35,10 @@ Game::Game(Td *td, string title, string description, tl_object_ptr<telegram_api:
     : title_(std::move(title)), description_(std::move(description)) {
   CHECK(td != nullptr);
   CHECK(photo != nullptr);
-  if (photo->get_id() == telegram_api::photo::ID) {
-    photo_ = get_photo(td->file_manager_.get(), move_tl_object_as<telegram_api::photo>(photo), owner_dialog_id);
+  photo_ = get_photo(td->file_manager_.get(), std::move(photo), owner_dialog_id);
+  if (photo_.id == -2) {
+    LOG(ERROR) << "Receive empty photo for game " << title;
+    photo_.id = 0;  // to prevent null photo in td_api
   }
   if (document != nullptr) {
     int32 document_id = document->get_id();
@@ -76,13 +78,7 @@ UserId Game::get_bot_user_id() const {
 
 vector<FileId> Game::get_file_ids(const Td *td) const {
   auto result = photo_get_file_ids(photo_);
-  if (animation_file_id_.is_valid()) {
-    result.push_back(animation_file_id_);
-    auto thumbnail_file_id = td->animations_manager_->get_animation_thumbnail_file_id(animation_file_id_);
-    if (thumbnail_file_id.is_valid()) {
-      result.push_back(thumbnail_file_id);
-    }
-  }
+  Document(Document::Type::Animation, animation_file_id_).append_file_ids(td, result);
   return result;
 }
 
@@ -99,6 +95,10 @@ tl_object_ptr<td_api::game> Game::get_game_object(Td *td) const {
       id_, short_name_, title_, get_formatted_text_object(text_), description_,
       get_photo_object(td->file_manager_.get(), &photo_),
       td->animations_manager_->get_animation_object(animation_file_id_, "get_game_object"));
+}
+
+bool Game::has_input_media() const {
+  return bot_user_id_.is_valid();
 }
 
 tl_object_ptr<telegram_api::inputMediaGame> Game::get_input_media_game(const Td *td) const {

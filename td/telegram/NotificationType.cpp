@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -53,11 +53,7 @@ class NotificationTypeMessage : public NotificationType {
   StringBuilder &to_string_builder(StringBuilder &string_builder) const override {
     return string_builder << "NewMessageNotification[" << message_id_ << ']';
   }
-  /*
-  Type get_type() const override {
-    return Type::Message;
-  }
-  */
+
   MessageId message_id_;
 
  public:
@@ -89,11 +85,7 @@ class NotificationTypeSecretChat : public NotificationType {
   StringBuilder &to_string_builder(StringBuilder &string_builder) const override {
     return string_builder << "NewSecretChatNotification[]";
   }
-  /*
-  Type get_type() const override {
-    return Type::SecretChat;
-  }
-  */
+
  public:
   NotificationTypeSecretChat() {
   }
@@ -123,11 +115,7 @@ class NotificationTypeCall : public NotificationType {
   StringBuilder &to_string_builder(StringBuilder &string_builder) const override {
     return string_builder << "NewCallNotification[" << call_id_ << ']';
   }
-  /*
-  Type get_type() const override {
-    return Type::Call;
-  }
-  */
+
   CallId call_id_;
 
  public:
@@ -274,7 +262,12 @@ class NotificationTypePushMessage : public NotificationType {
           return td_api::make_object<td_api::pushMessageContentMediaAlbum>(to_integer<int32>(arg), true, false);
         }
         if (key == "MESSAGE_POLL") {
-          return td_api::make_object<td_api::pushMessageContentPoll>(arg, is_pinned);
+          return td_api::make_object<td_api::pushMessageContentPoll>(arg, true, is_pinned);
+        }
+        break;
+      case 'Q':
+        if (key == "MESSAGE_QUIZ") {
+          return td_api::make_object<td_api::pushMessageContentPoll>(arg, false, is_pinned);
         }
         break;
       case 'S':
@@ -328,34 +321,35 @@ class NotificationTypePushMessage : public NotificationType {
     auto sender_user_id = G()->td().get_actor_unsafe()->contacts_manager_->get_user_id_object(
         sender_user_id_, "get_notification_type_object");
     return td_api::make_object<td_api::notificationTypeNewPushMessage>(
-        message_id_.get(), sender_user_id, get_push_message_content_object(key_, arg_, photo_, document_));
+        message_id_.get(), sender_user_id, sender_name_, is_outgoing_,
+        get_push_message_content_object(key_, arg_, photo_, document_));
   }
 
   StringBuilder &to_string_builder(StringBuilder &string_builder) const override {
-    return string_builder << "NewPushMessageNotification[" << sender_user_id_ << ", " << message_id_ << ", " << key_
-                          << ", " << arg_ << ", " << photo_ << ", " << document_ << ']';
+    return string_builder << "NewPushMessageNotification[" << sender_user_id_ << "/\"" << sender_name_ << "\", "
+                          << message_id_ << ", " << key_ << ", " << arg_ << ", " << photo_ << ", " << document_ << ']';
   }
-  /*
-  Type get_type() const override {
-    return Type::PushMessage;
-  }
-  */
+
   UserId sender_user_id_;
   MessageId message_id_;
+  string sender_name_;
   string key_;
   string arg_;
   Photo photo_;
   Document document_;
+  bool is_outgoing_;
 
  public:
-  NotificationTypePushMessage(UserId sender_user_id, MessageId message_id, string key, string arg, Photo photo,
-                              Document document)
+  NotificationTypePushMessage(UserId sender_user_id, string sender_name, bool is_outgoing, MessageId message_id,
+                              string key, string arg, Photo photo, Document document)
       : sender_user_id_(std::move(sender_user_id))
       , message_id_(message_id)
+      , sender_name_(std::move(sender_name))
       , key_(std::move(key))
       , arg_(std::move(arg))
       , photo_(std::move(photo))
-      , document_(std::move(document)) {
+      , document_(std::move(document))
+      , is_outgoing_(is_outgoing) {
   }
 };
 
@@ -371,11 +365,12 @@ unique_ptr<NotificationType> create_new_call_notification(CallId call_id) {
   return make_unique<NotificationTypeCall>(call_id);
 }
 
-unique_ptr<NotificationType> create_new_push_message_notification(UserId sender_user_id, MessageId message_id,
-                                                                  string key, string arg, Photo photo,
-                                                                  Document document) {
-  return td::make_unique<NotificationTypePushMessage>(sender_user_id, message_id, std::move(key), std::move(arg),
-                                                      std::move(photo), std::move(document));
+unique_ptr<NotificationType> create_new_push_message_notification(UserId sender_user_id, string sender_name,
+                                                                  bool is_outgoing, MessageId message_id, string key,
+                                                                  string arg, Photo photo, Document document) {
+  return td::make_unique<NotificationTypePushMessage>(sender_user_id, std::move(sender_name), is_outgoing, message_id,
+                                                      std::move(key), std::move(arg), std::move(photo),
+                                                      std::move(document));
 }
 
 }  // namespace td

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -203,9 +203,9 @@ class MapDownloadGenerateActor : public FileGenerateActor {
     net_callback_ = create_actor<Callback>("MapDownloadGenerateCallback", actor_id(this));
 
     LOG(INFO) << "Download " << conversion_;
-    auto query = G()->net_query_creator().create(
-        create_storer(telegram_api::upload_getWebFile(r_input_web_file.move_as_ok(), 0, 1 << 20)),
-        G()->get_webfile_dc_id(), NetQuery::Type::DownloadSmall);
+    auto query =
+        G()->net_query_creator().create(telegram_api::upload_getWebFile(r_input_web_file.move_as_ok(), 0, 1 << 20),
+                                        G()->get_webfile_dc_id(), NetQuery::Type::DownloadSmall);
     G()->net_query_dispatcher().dispatch_with_callback(std::move(query), {net_callback_.get(), 0});
   }
 
@@ -375,7 +375,7 @@ static Status check_mtime(std::string &conversion, CSlice original_path) {
   if (original_path.empty()) {
     return Status::OK();
   }
-  Parser parser(conversion);
+  ConstParser parser(conversion);
   if (!parser.skip_start_with("#mtime#")) {
     return Status::OK();
   }

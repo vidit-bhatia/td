@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,6 +7,8 @@
 #include "td/utils/port/signals.h"
 
 #include "td/utils/port/config.h"
+#include "td/utils/port/stacktrace.h"
+#include "td/utils/port/StdStreams.h"
 
 #include "td/utils/common.h"
 #include "td/utils/format.h"
@@ -22,6 +24,7 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <limits>
@@ -286,7 +289,7 @@ void signal_safe_write_pointer(void *p, bool add_header) {
   char *ptr = end;
   *--ptr = '\n';
   do {
-    *--ptr = td::format::hex_digit(addr % 16);
+    *--ptr = format::hex_digit(addr % 16);
     addr /= 16;
   } while (addr != 0);
   *--ptr = 'x';
@@ -294,6 +297,32 @@ void signal_safe_write_pointer(void *p, bool add_header) {
   ptr -= 9;
   std::memcpy(ptr, "Address: ", 9);
   signal_safe_write(Slice(ptr, end), add_header);
+}
+
+static void block_stdin() {
+#if TD_PORT_POSIX
+  Stdin().get_native_fd().set_is_blocking(true).ignore();
+#endif
+}
+
+static void default_failure_signal_handler(int sig) {
+  Stacktrace::init();
+  signal_safe_write_signal_number(sig);
+
+  Stacktrace::PrintOptions options;
+  options.use_gdb = true;
+  Stacktrace::print_to_stderr(options);
+
+  block_stdin();
+  _Exit(EXIT_FAILURE);
+}
+
+Status set_default_failure_signal_handler() {
+  std::atexit(block_stdin);
+  TRY_STATUS(setup_signals_alt_stack());
+  TRY_STATUS(set_signal_handler(SignalType::Abort, default_failure_signal_handler));
+  TRY_STATUS(set_signal_handler(SignalType::Error, default_failure_signal_handler));
+  return Status::OK();
 }
 
 }  // namespace td

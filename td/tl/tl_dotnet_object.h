@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -63,7 +63,7 @@ inline String^ FromUnmanaged(const std::string &from) {
 }
 
 inline auto CLRCALL BytesFromUnmanaged(const std::string &from) {
-  Array<byte>^ res = REF_NEW Vector<byte>(static_cast<ArrayIndexType>(from.size()));
+  Array<BYTE>^ res = REF_NEW Vector<BYTE>(static_cast<ArrayIndexType>(from.size()));
   ArrayIndexType i = 0;
   for (auto b : from) {
     ArraySet(res, i++, b);
@@ -160,7 +160,7 @@ inline std::string ToUnmanaged(String ^from) {
   return string_to_unmanaged(from);
 }
 
-inline std::string ToUnmanaged(Array<byte>^ from) {
+inline std::string ToUnmanaged(Array<BYTE>^ from) {
   if (!from) {
     return std::string();
   }

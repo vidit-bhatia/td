@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -33,7 +33,7 @@
 #include "td/utils/Status.h"
 #include "td/utils/UInt.h"
 
-#include "test/data.h"
+#include "data.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -47,7 +47,7 @@ static string make_chunked(string str) {
   auto v = rand_split(str);
   string res;
   for (auto &s : v) {
-    res += PSTRING() << format::as_hex_dump(int(s.size()));
+    res += PSTRING() << format::as_hex_dump(static_cast<int32>(s.size()));
     res += "\r\n";
     res += s;
     res += "\r\n";
@@ -141,7 +141,6 @@ TEST(Http, reader) {
     int max_post_size = 10000;
     reader.init(&input, max_post_size, 0);
 
-    std::srand(4);
     std::vector<string> contents(1000);
     std::generate(contents.begin(), contents.end(), gen_http_content);
     auto v = td::transform(contents, rand_http_query);
@@ -354,13 +353,13 @@ TEST(Http, chunked_flow_error) {
 
 TEST(Http, gzip_chunked_flow) {
   auto str = rand_string('a', 'z', 1000000);
-  auto parts = rand_split(make_chunked(gzencode(str).as_slice().str()));
+  auto parts = rand_split(make_chunked(gzencode(str, 2.0).as_slice().str()));
 
-  td::ChainBufferWriter input_writer;
+  ChainBufferWriter input_writer;
   auto input = input_writer.extract_reader();
   ByteFlowSource source(&input);
   HttpChunkedByteFlow chunked_flow;
-  GzipByteFlow gzip_flow(Gzip::Decode);
+  GzipByteFlow gzip_flow(Gzip::Mode::Decode);
   ByteFlowSink sink;
   source >> chunked_flow >> gzip_flow >> sink;
 

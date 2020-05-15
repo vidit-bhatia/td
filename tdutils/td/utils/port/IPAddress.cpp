@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -386,7 +386,7 @@ Status IPAddress::init_host_port(CSlice host, CSlice port, bool prefer_ipv6) {
   }
 #endif
   TRY_RESULT(ascii_host, idn_to_ascii(host));
-  host = ascii_host;
+  host = ascii_host;  // assign string to CSlice
 
   // some getaddrinfo implementations use inet_pton instead of inet_aton and support only decimal-dotted IPv4 form,
   // and so doesn't recognize 0x12.0x34.0x56.0x78, or 0x12345678, or 0x7f.001 as valid IPv4 addresses
@@ -401,7 +401,7 @@ Status IPAddress::init_host_port(CSlice host, CSlice port, bool prefer_ipv6) {
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
-  LOG(INFO) << "Try to init IP address of " << host << " with port " << port;
+  LOG(DEBUG + 10) << "Try to init IP address of " << host << " with port " << port;
   auto err = getaddrinfo(host.c_str(), port.c_str(), &hints, &info);
   if (err != 0) {
 #if TD_WINDOWS
@@ -466,7 +466,7 @@ Status IPAddress::init_sockaddr(sockaddr *addr, socklen_t len) {
   }
 
   is_valid_ = true;
-  LOG(INFO) << "Have address " << get_ip_str() << " with port " << get_port();
+  LOG(DEBUG + 10) << "Have address " << get_ip_str() << " with port " << get_port();
   return Status::OK();
 }
 
@@ -497,6 +497,11 @@ Status IPAddress::init_peer_address(const SocketFd &socket_fd) {
 CSlice IPAddress::ipv4_to_str(uint32 ipv4) {
   ipv4 = ntohl(ipv4);
   return ::td::get_ip_str(AF_INET, &ipv4);
+}
+
+CSlice IPAddress::ipv6_to_str(Slice ipv6) {
+  CHECK(ipv6.size() == 16);
+  return ::td::get_ip_str(AF_INET6, ipv6.ubegin());
 }
 
 Slice IPAddress::get_ip_str() const {

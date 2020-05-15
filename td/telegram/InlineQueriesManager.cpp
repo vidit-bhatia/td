@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -34,6 +34,7 @@
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/TdDb.h"
+#include "td/telegram/Venue.h"
 #include "td/telegram/VideosManager.h"
 #include "td/telegram/VoiceNotesManager.h"
 
@@ -79,9 +80,9 @@ class GetInlineBotResultsQuery : public Td::ResultHandler {
       input_peer = make_tl_object<telegram_api::inputPeerEmpty>();
     }
 
-    auto net_query = G()->net_query_creator().create(create_storer(telegram_api::messages_getInlineBotResults(
+    auto net_query = G()->net_query_creator().create(telegram_api::messages_getInlineBotResults(
         flags, std::move(bot_input_user), std::move(input_peer),
-        user_location.empty() ? nullptr : user_location.get_input_geo_point(), query, offset)));
+        user_location.empty() ? nullptr : user_location.get_input_geo_point(), query, offset));
     auto result = net_query.get_weak();
     net_query->need_resend_on_503 = false;
     send_query(std::move(net_query));
@@ -134,9 +135,9 @@ class SetInlineBotResultsQuery : public Td::ResultHandler {
       flags |= telegram_api::messages_setInlineBotResults::SWITCH_PM_MASK;
       inline_bot_switch_pm = make_tl_object<telegram_api::inlineBotSwitchPM>(switch_pm_text, switch_pm_parameter);
     }
-    send_query(G()->net_query_creator().create(create_storer(telegram_api::messages_setInlineBotResults(
+    send_query(G()->net_query_creator().create(telegram_api::messages_setInlineBotResults(
         flags, false /*ignored*/, false /*ignored*/, inline_query_id, std::move(results), cache_time, next_offset,
-        std::move(inline_bot_switch_pm)))));
+        std::move(inline_bot_switch_pm))));
   }
 
   void on_result(uint64 id, BufferSlice packet) override {
@@ -179,6 +180,9 @@ void InlineQueriesManager::on_drop_inline_query_result_timeout_callback(void *in
 }
 
 void InlineQueriesManager::after_get_difference() {
+  if (td_->auth_manager_->is_bot()) {
+    return;
+  }
   if (recently_used_bots_loaded_ < 2) {
     Promise<Unit> promise;
     load_recently_used_bots(promise);
@@ -319,6 +323,18 @@ void InlineQueriesManager::answer_inline_query(int64 inline_query_id, bool is_pe
     return promise.set_error(Status::Error(400, "Method can be used by bots only"));
   }
 
+  if (!switch_pm_text.empty()) {
+    if (switch_pm_parameter.empty()) {
+      return promise.set_error(Status::Error(400, "Can't use empty switch_pm_parameter"));
+    }
+    if (switch_pm_parameter.size() > 64) {
+      return promise.set_error(Status::Error(400, "Too long switch_pm_parameter specified"));
+    }
+    if (!is_base64url_characters(switch_pm_parameter)) {
+      return promise.set_error(Status::Error(400, "Unallowed characters in switch_pm_parameter are used"));
+    }
+  }
+
   vector<tl_object_ptr<telegram_api::InputBotInlineResult>> results;
 
   bool is_gallery = false;
@@ -434,7 +450,7 @@ void InlineQueriesManager::answer_inline_query(int64 inline_query_id, bool is_pe
           return promise.set_error(Status::Error(400, "Field \"phone_number\" must contain a valid phone number"));
         }
         if (first_name.empty()) {
-          return promise.set_error(Status::Error(400, "Field \"first_name\" should be non-empty"));
+          return promise.set_error(Status::Error(400, "Field \"first_name\" must be non-empty"));
         }
         title = last_name.empty() ? first_name : first_name + " " + last_name;
         description = std::move(phone_number);
@@ -535,7 +551,7 @@ void InlineQueriesManager::answer_inline_query(int64 inline_query_id, bool is_pe
         id = std::move(sticker->id_);
         thumbnail_url = std::move(sticker->thumbnail_url_);
         content_url = std::move(sticker->sticker_url_);
-        content_type = "image/webp";
+        content_type = "image/webp";  // or "application/x-tgsticker"; not used for previously uploaded files
         width = sticker->sticker_width_;
         height = sticker->sticker_height_;
         is_gallery = true;
@@ -617,7 +633,7 @@ void InlineQueriesManager::answer_inline_query(int64 inline_query_id, bool is_pe
     }
     auto inline_message = r_inline_message.move_as_ok();
     if (inline_message->get_id() == telegram_api::inputBotInlineMessageMediaAuto::ID && file_type == FileType::Temp) {
-      return promise.set_error(Status::Error(400, "Sent message content should be explicitly specified"));
+      return promise.set_error(Status::Error(400, "Sent message content must be explicitly specified"));
     }
 
     if (duration < 0) {
@@ -650,19 +666,19 @@ void InlineQueriesManager::answer_inline_query(int64 inline_query_id, bool is_pe
       if (file_view.is_encrypted()) {
         return promise.set_error(Status::Error(400, "Can't send encrypted file"));
       }
-      if (file_view.remote_location().is_web()) {
+      if (file_view.main_remote_location().is_web()) {
         return promise.set_error(Status::Error(400, "Can't send web file"));
       }
 
       if (file_type == FileType::Photo) {
         auto result = make_tl_object<telegram_api::inputBotInlineResultPhoto>(
-            id, type, file_view.remote_location().as_input_photo(), std::move(inline_message));
+            id, type, file_view.main_remote_location().as_input_photo(), std::move(inline_message));
         results.push_back(std::move(result));
         continue;
       }
 
       auto result = make_tl_object<telegram_api::inputBotInlineResultDocument>(
-          flags, id, type, title, description, file_view.remote_location().as_input_document(),
+          flags, id, type, title, description, file_view.main_remote_location().as_input_document(),
           std::move(inline_message));
       results.push_back(std::move(result));
       continue;
@@ -836,8 +852,8 @@ td_api::object_ptr<td_api::localFile> copy(const td_api::localFile &obj) {
 }
 template <>
 td_api::object_ptr<td_api::remoteFile> copy(const td_api::remoteFile &obj) {
-  return td_api::make_object<td_api::remoteFile>(obj.id_, obj.is_uploading_active_, obj.is_uploading_completed_,
-                                                 obj.uploaded_size_);
+  return td_api::make_object<td_api::remoteFile>(obj.id_, obj.unique_id_, obj.is_uploading_active_,
+                                                 obj.is_uploading_completed_, obj.uploaded_size_);
 }
 
 template <>
@@ -849,6 +865,11 @@ td_api::object_ptr<td_api::file> copy(const td_api::file &obj) {
     return td_api::make_object<td_api::file>(obj.id_, obj.size_, obj.expected_size_, copy(obj.local_),
                                              copy(obj.remote_));
   }
+}
+
+template <>
+tl_object_ptr<td_api::minithumbnail> copy(const td_api::minithumbnail &obj) {
+  return make_tl_object<td_api::minithumbnail>(obj.width_, obj.height_, obj.data_);
 }
 
 template <>
@@ -885,36 +906,40 @@ tl_object_ptr<td_api::maskPosition> copy(const td_api::maskPosition &obj) {
 template <>
 tl_object_ptr<td_api::animation> copy(const td_api::animation &obj) {
   return make_tl_object<td_api::animation>(obj.duration_, obj.width_, obj.height_, obj.file_name_, obj.mime_type_,
-                                           copy(obj.thumbnail_), copy(obj.animation_));
+                                           copy(obj.minithumbnail_), copy(obj.thumbnail_), copy(obj.animation_));
 }
 
 template <>
 tl_object_ptr<td_api::audio> copy(const td_api::audio &obj) {
   return make_tl_object<td_api::audio>(obj.duration_, obj.title_, obj.performer_, obj.file_name_, obj.mime_type_,
-                                       copy(obj.album_cover_thumbnail_), copy(obj.audio_));
+                                       copy(obj.album_cover_minithumbnail_), copy(obj.album_cover_thumbnail_),
+                                       copy(obj.audio_));
 }
 
 template <>
 tl_object_ptr<td_api::document> copy(const td_api::document &obj) {
-  return make_tl_object<td_api::document>(obj.file_name_, obj.mime_type_, copy(obj.thumbnail_), copy(obj.document_));
+  return make_tl_object<td_api::document>(obj.file_name_, obj.mime_type_, copy(obj.minithumbnail_),
+                                          copy(obj.thumbnail_), copy(obj.document_));
 }
 
 template <>
 tl_object_ptr<td_api::photo> copy(const td_api::photo &obj) {
-  return make_tl_object<td_api::photo>(obj.has_stickers_, transform(obj.sizes_, copy_photo_size));
+  return make_tl_object<td_api::photo>(obj.has_stickers_, copy(obj.minithumbnail_),
+                                       transform(obj.sizes_, copy_photo_size));
 }
 
 template <>
 tl_object_ptr<td_api::sticker> copy(const td_api::sticker &obj) {
-  return make_tl_object<td_api::sticker>(obj.set_id_, obj.width_, obj.height_, obj.emoji_, obj.is_mask_,
-                                         copy(obj.mask_position_), copy(obj.thumbnail_), copy(obj.sticker_));
+  return make_tl_object<td_api::sticker>(obj.set_id_, obj.width_, obj.height_, obj.emoji_, obj.is_animated_,
+                                         obj.is_mask_, copy(obj.mask_position_), copy(obj.thumbnail_),
+                                         copy(obj.sticker_));
 }
 
 template <>
 tl_object_ptr<td_api::video> copy(const td_api::video &obj) {
   return make_tl_object<td_api::video>(obj.duration_, obj.width_, obj.height_, obj.file_name_, obj.mime_type_,
-                                       obj.has_stickers_, obj.supports_streaming_, copy(obj.thumbnail_),
-                                       copy(obj.video_));
+                                       obj.has_stickers_, obj.supports_streaming_, copy(obj.minithumbnail_),
+                                       copy(obj.thumbnail_), copy(obj.video_));
 }
 
 template <>
@@ -1063,7 +1088,7 @@ string InlineQueriesManager::get_web_document_url(const tl_object_ptr<telegram_a
     return {};
   }
 
-  string url;
+  Slice url;
   switch (web_document_ptr->get_id()) {
     case telegram_api::webDocument::ID: {
       auto web_document = static_cast<const telegram_api::webDocument *>(web_document_ptr.get());
@@ -1260,15 +1285,11 @@ void InlineQueriesManager::on_get_inline_query_results(UserId bot_user_id, uint6
           LOG_IF(ERROR, !is_photo) << "Wrong result type " << result->type_;
           auto photo = make_tl_object<td_api::inlineQueryResultPhoto>();
           photo->id_ = std::move(result->id_);
-          auto photo_ptr = std::move(result->photo_);
-          int32 photo_id = photo_ptr->get_id();
-          if (photo_id == telegram_api::photoEmpty::ID) {
+          Photo p = get_photo(td_->file_manager_.get(), std::move(result->photo_), DialogId());
+          if (p.id == -2) {
             LOG(ERROR) << "Receive empty cached photo in the result of inline query";
             break;
           }
-          CHECK(photo_id == telegram_api::photo::ID);
-
-          Photo p = get_photo(td_->file_manager_.get(), move_tl_object_as<telegram_api::photo>(photo_ptr), DialogId());
           photo->photo_ = get_photo_object(td_->file_manager_.get(), &p);
           photo->title_ = std::move(result->title_);
           photo->description_ = std::move(result->description_);
@@ -1707,12 +1728,10 @@ bool InlineQueriesManager::update_bot_usage(UserId bot_user_id) {
 }
 
 void InlineQueriesManager::remove_recent_inline_bot(UserId bot_user_id, Promise<Unit> &&promise) {
-  auto it = std::find(recently_used_bot_user_ids_.begin(), recently_used_bot_user_ids_.end(), bot_user_id);
-  if (it != recently_used_bot_user_ids_.end()) {
-    recently_used_bot_user_ids_.erase(it);
+  if (td::remove(recently_used_bot_user_ids_, bot_user_id)) {
     save_recently_used_bots();
   }
-  return promise.set_value(Unit());
+  promise.set_value(Unit());
 }
 
 }  // namespace td

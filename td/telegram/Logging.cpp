@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -59,7 +59,7 @@ Status Logging::set_current_stream(td_api::object_ptr<td_api::LogStream> stream)
       auto file_stream = td_api::move_object_as<td_api::logStreamFile>(stream);
       auto max_log_file_size = file_stream->max_file_size_;
       if (max_log_file_size <= 0) {
-        return Status::Error("Max log file size should be positive");
+        return Status::Error("Max log file size must be positive");
       }
 
       TRY_STATUS(file_log.init(file_stream->path_, max_log_file_size));

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -11,6 +11,7 @@
 
 #include "td/telegram/Client.h"
 #include "td/telegram/ClientActor.h"
+#include "td/telegram/files/PartsManager.h"
 
 #include "td/telegram/td_api.h"
 
@@ -23,6 +24,7 @@
 #include "td/utils/misc.h"
 #include "td/utils/port/FileFd.h"
 #include "td/utils/port/path.h"
+#include "td/utils/port/thread.h"
 #include "td/utils/Random.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
@@ -140,7 +142,7 @@ class TestClient : public Actor {
 
   void start_up() override {
     rmrf(name_).ignore();
-    set_context(std::make_shared<td::ActorContext>());
+    auto old_context = set_context(std::make_shared<td::ActorContext>());
     set_tag(name_);
     LOG(INFO) << "START UP!";
 
@@ -211,10 +213,13 @@ class DoAuthentication : public Task {
         function = make_tl_object<td_api::checkDatabaseEncryptionKey>();
         break;
       case td_api::authorizationStateWaitPhoneNumber::ID:
-        function = make_tl_object<td_api::setAuthenticationPhoneNumber>(phone_, false, true);
+        function = make_tl_object<td_api::setAuthenticationPhoneNumber>(phone_, nullptr);
         break;
       case td_api::authorizationStateWaitCode::ID:
-        function = make_tl_object<td_api::checkAuthenticationCode>(code_, name_, "");
+        function = make_tl_object<td_api::checkAuthenticationCode>(code_);
+        break;
+      case td_api::authorizationStateWaitRegistration::ID:
+        function = make_tl_object<td_api::registerUser>(name_, "");
         break;
       case td_api::authorizationStateWaitTdlibParameters::ID: {
         auto parameters = td_api::make_object<td_api::tdlibParameters>();
@@ -304,7 +309,7 @@ class SetUsername : public Task {
       auto chat = move_tl_object_as<td_api::chat>(res);
       this->send_query(
           make_tl_object<td_api::sendMessage>(
-              chat->id_, 0, false, false, nullptr,
+              chat->id_, 0, nullptr, nullptr,
               make_tl_object<td_api::inputMessageText>(
                   make_tl_object<td_api::formattedText>(PSTRING() << tag_ << " INIT", Auto()), false, false)),
           [](auto res) {});
@@ -371,7 +376,7 @@ class TestA : public Task {
       auto chat = move_tl_object_as<td_api::chat>(res);
       for (int i = 0; i < 20; i++) {
         this->send_query(make_tl_object<td_api::sendMessage>(
-                             chat->id_, 0, false, false, nullptr,
+                             chat->id_, 0, nullptr, nullptr,
                              make_tl_object<td_api::inputMessageText>(
                                  make_tl_object<td_api::formattedText>(PSTRING() << tag_ << " " << (1000 + i), Auto()),
                                  false, false)),
@@ -419,7 +424,7 @@ class TestSecretChat : public Task {
       LOG(INFO) << "SEND ENCRYPTED MESSAGES";
       for (int i = 0; i < 20; i++) {
         send_query(make_tl_object<td_api::sendMessage>(
-                       chat_id_, 0, false, false, nullptr,
+                       chat_id_, 0, nullptr, nullptr,
                        make_tl_object<td_api::inputMessageText>(
                            make_tl_object<td_api::formattedText>(PSTRING() << tag_ << " " << (1000 + i), Auto()), false,
                            false)),
@@ -481,7 +486,7 @@ class TestFileGenerated : public Task {
     file.flush_write().ensure();  // important
     file.close();
     this->send_query(make_tl_object<td_api::sendMessage>(
-                         chat_id_, 0, false, false, nullptr,
+                         chat_id_, 0, nullptr, nullptr,
                          make_tl_object<td_api::inputMessageDocument>(
                              make_tl_object<td_api::inputFileGenerated>(file_path, "square", 0),
                              make_tl_object<td_api::inputThumbnail>(
@@ -490,7 +495,7 @@ class TestFileGenerated : public Task {
                      [](auto res) { check_td_error(res); });
 
     this->send_query(
-        make_tl_object<td_api::sendMessage>(chat_id_, 0, false, false, nullptr,
+        make_tl_object<td_api::sendMessage>(chat_id_, 0, nullptr, nullptr,
                                             make_tl_object<td_api::inputMessageDocument>(
                                                 make_tl_object<td_api::inputFileGenerated>(file_path, "square", 0),
                                                 nullptr, make_tl_object<td_api::formattedText>(tag_, Auto()))),
@@ -596,7 +601,7 @@ class CheckTestC : public Task {
   void one_file() {
     this->send_query(
         make_tl_object<td_api::sendMessage>(
-            chat_id_, 0, false, false, nullptr,
+            chat_id_, 0, nullptr, nullptr,
             make_tl_object<td_api::inputMessageText>(
                 make_tl_object<td_api::formattedText>(PSTRING() << tag_ << " ONE_FILE", Auto()), false, false)),
         [](auto res) { check_td_error(res); });
@@ -866,6 +871,44 @@ TEST(Client, SimpleMulti) {
         break;
       }
     }
+  }
+}
+
+#if !TD_THREAD_UNSUPPORTED
+TEST(Client, Multi) {
+  std::vector<td::thread> threads;
+  for (int i = 0; i < 4; i++) {
+    threads.emplace_back([] {
+      for (int i = 0; i < 1000; i++) {
+        td::Client client;
+        client.send({3, td::make_tl_object<td::td_api::testSquareInt>(3)});
+        while (true) {
+          auto result = client.receive(10);
+          if (result.id == 3) {
+            break;
+          }
+        }
+      }
+    });
+  }
+
+  for (auto &thread : threads) {
+    thread.join();
+  }
+}
+#endif
+
+TEST(PartsManager, hands) {
+  //Status init(int64 size, int64 expected_size, bool is_size_final, size_t part_size,
+  //const std::vector<int> &ready_parts, bool use_part_count_limit) TD_WARN_UNUSED_RESULT;
+  {
+    PartsManager pm;
+    pm.init(0, 100000, false, 10, {0, 1, 2}, false, true).ensure_error();
+    //pm.set_known_prefix(0, false).ensure();
+  }
+  {
+    PartsManager pm;
+    pm.init(1, 100000, true, 10, {0, 1, 2}, false, true).ensure_error();
   }
 }
 

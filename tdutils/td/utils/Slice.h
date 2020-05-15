@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -110,7 +110,7 @@ inline size_t MutableSlice::find(char c) const {
       return pos;
     }
   }
-  return static_cast<size_t>(-1);
+  return npos;
 }
 
 inline size_t MutableSlice::rfind(char c) const {
@@ -119,7 +119,7 @@ inline size_t MutableSlice::rfind(char c) const {
       return pos;
     }
   }
-  return static_cast<size_t>(-1);
+  return npos;
 }
 
 inline void MutableSlice::copy_from(Slice from) {
@@ -245,7 +245,7 @@ inline size_t Slice::find(char c) const {
       return pos;
     }
   }
-  return static_cast<size_t>(-1);
+  return npos;
 }
 
 inline size_t Slice::rfind(char c) const {
@@ -254,7 +254,7 @@ inline size_t Slice::rfind(char c) const {
       return pos;
     }
   }
-  return static_cast<size_t>(-1);
+  return npos;
 }
 
 inline char Slice::back() const {
@@ -303,6 +303,7 @@ inline std::size_t SliceHash::operator()(Slice slice) const {
 inline Slice as_slice(Slice slice) {
   return slice;
 }
+
 inline MutableSlice as_slice(MutableSlice slice) {
   return slice;
 }
@@ -312,6 +313,14 @@ inline Slice as_slice(const string &str) {
 }
 
 inline MutableSlice as_slice(string &str) {
+  return str;
+}
+
+inline MutableSlice as_mutable_slice(MutableSlice slice) {
+  return slice;
+}
+
+inline MutableSlice as_mutable_slice(string &str) {
   return str;
 }
 

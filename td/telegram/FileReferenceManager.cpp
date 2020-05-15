@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,18 +7,20 @@
 #include "td/telegram/FileReferenceManager.h"
 
 #include "td/telegram/AnimationsManager.h"
+#include "td/telegram/BackgroundManager.h"
 #include "td/telegram/ContactsManager.h"
 #include "td/telegram/files/FileManager.h"
 #include "td/telegram/Global.h"
 #include "td/telegram/MessagesManager.h"
+#include "td/telegram/StickerSetId.h"
 #include "td/telegram/StickersManager.h"
-#include "td/telegram/WallpaperManager.h"
 #include "td/telegram/WebPagesManager.h"
 
 #include "td/utils/common.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
 #include "td/utils/overloaded.h"
+#include "td/utils/Time.h"
 
 namespace td {
 
@@ -40,15 +42,16 @@ size_t FileReferenceManager::get_file_reference_error_pos(const Status &error) {
 }
 
 /*
-fileSourceMessage chat_id:int53 message_id:int53 = FileSource;         // repaired with get_message_from_server
-fileSourceUserProfilePhoto user_id:int32 photo_id:int64 = FileSource;  // repaired with photos.getUserPhotos
-fileSourceBasicGroupPhoto basic_group_id:int32 = FileSource;           // repaired with messages.getChats
-fileSourceSupergroupPhoto supergroup_id:int32 = FileSource;            // repaired with channels.getChannels
-fileSourceWebPage url:string = FileSource;                             // repaired with messages.getWebPage
-fileSourceWallpapers = FileSource;                                     // repaired with account.getWallPapers
-fileSourceSavedAnimations = FileSource;                                // repaired with messages.getSavedGifs
-fileSourceRecentStickers is_attached:Bool = FileSource;                // repaired with messages.getRecentStickers, not reliable
-fileSourceFavoriteStickers = FileSource;                               // repaired with messages.getFavedStickers, not reliable
+fileSourceMessage chat_id:int53 message_id:int53 = FileSource;           // repaired with get_message_from_server
+fileSourceUserProfilePhoto user_id:int32 photo_id:int64 = FileSource;    // repaired with photos.getUserPhotos
+fileSourceBasicGroupPhoto basic_group_id:int32 = FileSource;             // repaired with messages.getChats
+fileSourceSupergroupPhoto supergroup_id:int32 = FileSource;              // repaired with channels.getChannels
+fileSourceWebPage url:string = FileSource;                               // repaired with messages.getWebPage
+fileSourceWallpapers = FileSource;                                       // can't be repaired
+fileSourceSavedAnimations = FileSource;                                  // repaired with messages.getSavedGifs
+fileSourceRecentStickers is_attached:Bool = FileSource;                  // repaired with messages.getRecentStickers, not reliable
+fileSourceFavoriteStickers = FileSource;                                 // repaired with messages.getFavedStickers, not reliable
+fileSourceBackground background_id:int64 access_hash:int64 = FileSource; // repaired with account.getWallPaper
 */
 
 FileSourceId FileReferenceManager::get_current_file_source_id() const {
@@ -82,11 +85,6 @@ FileSourceId FileReferenceManager::create_channel_photo_file_source(ChannelId ch
   return add_file_source_id(source, PSLICE() << "photo of " << channel_id);
 }
 
-FileSourceId FileReferenceManager::create_wallpapers_file_source() {
-  FileSourceWallpapers source;
-  return add_file_source_id(source, "wallpapers");
-}
-
 FileSourceId FileReferenceManager::create_web_page_file_source(string url) {
   FileSourceWebPage source{std::move(url)};
   auto source_str = PSTRING() << "web page of " << source.url;
@@ -106,6 +104,11 @@ FileSourceId FileReferenceManager::create_recent_stickers_file_source(bool is_at
 FileSourceId FileReferenceManager::create_favorite_stickers_file_source() {
   FileSourceFavoriteStickers source;
   return add_file_source_id(source, PSLICE() << "favorite stickers");
+}
+
+FileSourceId FileReferenceManager::create_background_file_source(BackgroundId background_id, int64 access_hash) {
+  FileSourceBackground source{background_id, access_hash};
+  return add_file_source_id(source, PSLICE() << background_id);
 }
 
 bool FileReferenceManager::add_file_source(NodeId node_id, FileSourceId file_source_id) {
@@ -200,37 +203,44 @@ void FileReferenceManager::run_node(NodeId node_id) {
     node.query = {};
     return;
   }
+  if (node.last_successful_repair_time >= Time::now() - 60) {
+    VLOG(file_references) << "Recently repaired file reference for file " << node_id << ", do not try again";
+    for (auto &p : node.query->promises) {
+      p.set_error(Status::Error(429, "Too Many Requests: retry after 60"));
+    }
+    node.query = {};
+    return;
+  }
   auto file_source_id = node.file_source_ids.next();
   send_query({node_id, node.query->generation}, file_source_id);
 }
 
 void FileReferenceManager::send_query(Destination dest, FileSourceId file_source_id) {
-  VLOG(file_references) << "Send file references repair query for file " << dest.node_id << " with generation "
+  VLOG(file_references) << "Send file reference repair query for file " << dest.node_id << " with generation "
                         << dest.generation << " from " << file_source_id;
   auto &node = nodes_[dest.node_id];
   node.query->active_queries++;
 
   auto promise = PromiseCreator::lambda([dest, file_source_id, file_reference_manager = G()->file_reference_manager(),
-                                         file_manager = G()->file_manager()](Result<Unit> result) mutable {
+                                         file_manager = G()->file_manager()](Result<Unit> result) {
     if (G()->close_flag()) {
       VLOG(file_references) << "Ignore file reference repair from " << file_source_id << " during closing";
       return;
     }
 
-    auto new_promise =
-        PromiseCreator::lambda([dest, file_source_id, file_reference_manager](Result<Unit> result) mutable {
-          if (G()->close_flag()) {
-            VLOG(file_references) << "Ignore file reference repair from " << file_source_id << " during closing";
-            return;
-          }
+    auto new_promise = PromiseCreator::lambda([dest, file_source_id, file_reference_manager](Result<Unit> result) {
+      if (G()->close_flag()) {
+        VLOG(file_references) << "Ignore file reference repair from " << file_source_id << " during closing";
+        return;
+      }
 
-          Status status;
-          if (result.is_error()) {
-            status = result.move_as_error();
-          }
-          send_closure(file_reference_manager, &FileReferenceManager::on_query_result, dest, file_source_id,
-                       std::move(status), 0);
-        });
+      Status status;
+      if (result.is_error()) {
+        status = result.move_as_error();
+      }
+      send_closure(file_reference_manager, &FileReferenceManager::on_query_result, dest, file_source_id,
+                   std::move(status), 0);
+    });
 
     send_lambda(file_manager, [file_manager, dest, result = std::move(result), file_source_id,
                                new_promise = std::move(new_promise)]() mutable {
@@ -265,9 +275,7 @@ void FileReferenceManager::send_query(Destination dest, FileSourceId file_source
         send_closure_later(G()->contacts_manager(), &ContactsManager::reload_channel, source.channel_id,
                            std::move(promise));
       },
-      [&](const FileSourceWallpapers &source) {
-        send_closure_later(G()->wallpaper_manager(), &WallpaperManager::reload_wallpapers, std::move(promise));
-      },
+      [&](const FileSourceWallpapers &source) { promise.set_error(Status::Error("Can't repair old wallpapers")); },
       [&](const FileSourceWebPage &source) {
         send_closure_later(G()->web_pages_manager(), &WebPagesManager::reload_web_page_by_url, source.url,
                            std::move(promise));
@@ -281,12 +289,16 @@ void FileReferenceManager::send_query(Destination dest, FileSourceId file_source
       },
       [&](const FileSourceFavoriteStickers &source) {
         send_closure_later(G()->stickers_manager(), &StickersManager::repair_favorite_stickers, std::move(promise));
+      },
+      [&](const FileSourceBackground &source) {
+        send_closure_later(G()->background_manager(), &BackgroundManager::reload_background, source.background_id,
+                           source.access_hash, std::move(promise));
       }));
 }
 
 FileReferenceManager::Destination FileReferenceManager::on_query_result(Destination dest, FileSourceId file_source_id,
                                                                         Status status, int32 sub) {
-  VLOG(file_references) << "Receive result of file references repair query for file " << dest.node_id
+  VLOG(file_references) << "Receive result of file reference repair query for file " << dest.node_id
                         << " with generation " << dest.generation << " from " << file_source_id << ": " << status << " "
                         << sub;
   auto &node = nodes_[dest.node_id];
@@ -311,6 +323,7 @@ FileReferenceManager::Destination FileReferenceManager::on_query_result(Destinat
   }
 
   if (status.is_ok()) {
+    node.last_successful_repair_time = Time::now();
     for (auto &p : query->promises) {
       p.set_value(Unit());
     }
@@ -332,6 +345,23 @@ void FileReferenceManager::repair_file_reference(NodeId node_id, Promise<> promi
   }
   node.query->promises.push_back(std::move(promise));
   run_node(node_id);
+}
+
+void FileReferenceManager::reload_photo(PhotoSizeSource source, Promise<Unit> promise) {
+  switch (source.get_type()) {
+    case PhotoSizeSource::Type::DialogPhotoBig:
+    case PhotoSizeSource::Type::DialogPhotoSmall:
+      send_closure(G()->contacts_manager(), &ContactsManager::reload_dialog_info, source.dialog_photo().dialog_id,
+                   std::move(promise));
+      break;
+    case PhotoSizeSource::Type::StickerSetThumbnail:
+      send_closure(G()->stickers_manager(), &StickersManager::reload_sticker_set,
+                   StickerSetId(source.sticker_set_thumbnail().sticker_set_id),
+                   source.sticker_set_thumbnail().sticker_set_access_hash, std::move(promise));
+      break;
+    default:
+      promise.set_error(Status::Error("Unexpected PhotoSizeSource type"));
+  }
 }
 
 }  // namespace td

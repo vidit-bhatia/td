@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -24,7 +24,7 @@ void HttpProxy::send_connect() {
   string proxy_authorization;
   if (!username_.empty() || !password_.empty()) {
     auto userinfo = PSTRING() << username_ << ':' << password_;
-    proxy_authorization = PSTRING() << "Proxy-Authorization: basic " << td::base64_encode(userinfo) << "\r\n";
+    proxy_authorization = PSTRING() << "Proxy-Authorization: basic " << base64_encode(userinfo) << "\r\n";
   }
   fd_.output_buffer().append(PSLICE() << "CONNECT " << host << " HTTP/1.1\r\n"
                                       << "Host: " << host << "\r\n"

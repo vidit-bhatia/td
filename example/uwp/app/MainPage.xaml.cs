@@ -1,5 +1,5 @@
 ﻿//
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -94,13 +94,13 @@ namespace TdApp
             {
                 var args = command.Split(" ".ToCharArray(), 2);
                 AcceptCommand(command);
-                _client.Send(new TdApi.SetAuthenticationPhoneNumber(args[1], false, false), _handler);
+                _client.Send(new TdApi.SetAuthenticationPhoneNumber(args[1], null), _handler);
             }
             else if (command.StartsWith("cac"))
             {
                 var args = command.Split(" ".ToCharArray(), 2);
                 AcceptCommand(command);
-                _client.Send(new TdApi.CheckAuthenticationCode(args[1], String.Empty, String.Empty), _handler);
+                _client.Send(new TdApi.CheckAuthenticationCode(args[1]), _handler);
             }
             else if (command.StartsWith("cap"))
             {

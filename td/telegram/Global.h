@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -12,7 +12,6 @@
 #include "td/telegram/TdParameters.h"
 
 #include "td/actor/actor.h"
-#include "td/actor/Condition.h"
 #include "td/actor/PromiseFuture.h"
 #include "td/actor/SchedulerLocalStorage.h"
 
@@ -31,6 +30,7 @@
 
 namespace td {
 class AnimationsManager;
+class BackgroundManager;
 class CallManager;
 class ConfigManager;
 class ConfigShared;
@@ -53,7 +53,6 @@ class TdDb;
 class TempAuthKeyWatchdog;
 class TopDialogManager;
 class UpdatesManager;
-class WallpaperManager;
 class WebPagesManager;
 }  // namespace td
 
@@ -68,11 +67,17 @@ class Global : public ActorContext {
   Global(Global &&other) = delete;
   Global &operator=(Global &&other) = delete;
 
+  static constexpr int32 ID = -572104940;
+  int32 get_id() const override {
+    return ID;
+  }
+
 #define td_db() get_td_db_impl(__FILE__, __LINE__)
   TdDb *get_td_db_impl(const char *file, int line) {
     LOG_CHECK(td_db_) << close_flag() << " " << file << " " << line;
     return td_db_.get();
   }
+
   void close_all(Promise<> on_finished);
   void close_and_destroy_all(Promise<> on_finished);
 
@@ -80,6 +85,12 @@ class Global : public ActorContext {
 
   Slice get_dir() const {
     return parameters_.database_directory;
+  }
+  Slice get_secure_files_dir() const {
+    if (store_all_files_in_files_directory_) {
+      return get_files_dir();
+    }
+    return get_dir();
   }
   Slice get_files_dir() const {
     return parameters_.files_directory;
@@ -112,8 +123,8 @@ class Global : public ActorContext {
     return *shared_config_;
   }
 
-  double from_server_time(double date) const {
-    return date - get_server_time_difference();
+  bool is_server_time_reliable() const {
+    return server_time_difference_was_updated_;
   }
   double to_server_time(double now) const {
     return now + get_server_time_difference();
@@ -125,17 +136,23 @@ class Global : public ActorContext {
     return to_server_time(Time::now_cached());
   }
   int32 unix_time() const {
-    return static_cast<int32>(server_time());
+    return to_unix_time(server_time());
   }
   int32 unix_time_cached() const {
-    return static_cast<int32>(server_time_cached());
+    return to_unix_time(server_time_cached());
   }
 
   void update_server_time_difference(double diff);
 
+  void save_server_time();
+
   double get_server_time_difference() const {
     return server_time_difference_.load(std::memory_order_relaxed);
   }
+
+  void update_dns_time_difference(double diff);
+
+  double get_dns_time_difference() const;
 
   ActorId<StateManager> state_manager() const {
     return state_manager_;
@@ -153,6 +170,13 @@ class Global : public ActorContext {
   }
   void set_animations_manager(ActorId<AnimationsManager> animations_manager) {
     animations_manager_ = animations_manager;
+  }
+
+  ActorId<BackgroundManager> background_manager() const {
+    return background_manager_;
+  }
+  void set_background_manager(ActorId<BackgroundManager> background_manager) {
+    background_manager_ = background_manager;
   }
 
   ActorId<CallManager> call_manager() const {
@@ -253,13 +277,6 @@ class Global : public ActorContext {
     updates_manager_ = updates_manager;
   }
 
-  ActorId<WallpaperManager> wallpaper_manager() const {
-    return wallpaper_manager_;
-  }
-  void set_wallpaper_manager(ActorId<WallpaperManager> wallpaper_manager) {
-    wallpaper_manager_ = wallpaper_manager;
-  }
-
   ActorId<WebPagesManager> web_pages_manager() const {
     return web_pages_manager_;
   }
@@ -300,10 +317,6 @@ class Global : public ActorContext {
 
   DcId get_webfile_dc_id() const;
 
-#if !TD_HAVE_ATOMIC_SHARED_PTR
-  std::mutex dh_config_mutex_;
-#endif
-
   std::shared_ptr<DhConfig> get_dh_config() {
 #if !TD_HAVE_ATOMIC_SHARED_PTR
     std::lock_guard<std::mutex> guard(dh_config_mutex_);
@@ -313,6 +326,7 @@ class Global : public ActorContext {
     return atomic_load(&dh_config_);
 #endif
   }
+
   void set_dh_config(std::shared_ptr<DhConfig> new_dh_config) {
 #if !TD_HAVE_ATOMIC_SHARED_PTR
     std::lock_guard<std::mutex> guard(dh_config_mutex_);
@@ -322,19 +336,24 @@ class Global : public ActorContext {
 #endif
   }
 
-  void wait_binlog_replay_finish(Promise<> promise) {
-    binlog_replay_finish_.wait(std::move(promise));
-  }
-
-  void on_binlog_replay_finish() {
-    binlog_replay_finish_.set_true();
-  }
-
   void set_close_flag() {
     close_flag_ = true;
   }
   bool close_flag() const {
     return close_flag_.load();
+  }
+
+  bool is_expected_error(const Status &error) const {
+    CHECK(error.is_error());
+    if (error.code() == 401) {
+      // authorization is lost
+      return true;
+    }
+    if (error.code() == 420 || error.code() == 429) {
+      // flood wait
+      return true;
+    }
+    return close_flag();
   }
 
   const std::vector<std::shared_ptr<NetStatsCallback>> &get_net_stats_file_callbacks() {
@@ -348,14 +367,18 @@ class Global : public ActorContext {
 
   void add_location_access_hash(double latitude, double longitude, int64 access_hash);
 
+  void set_store_all_files_in_files_directory(bool flag) {
+    store_all_files_in_files_directory_ = flag;
+  }
+
  private:
   std::shared_ptr<DhConfig> dh_config_;
 
   unique_ptr<TdDb> td_db_;
-  Condition binlog_replay_finish_;
 
   ActorId<Td> td_;
   ActorId<AnimationsManager> animations_manager_;
+  ActorId<BackgroundManager> background_manager_;
   ActorId<CallManager> call_manager_;
   ActorId<ConfigManager> config_manager_;
   ActorId<ContactsManager> contacts_manager_;
@@ -370,7 +393,6 @@ class Global : public ActorContext {
   ActorId<StorageManager> storage_manager_;
   ActorId<TopDialogManager> top_dialog_manager_;
   ActorId<UpdatesManager> updates_manager_;
-  ActorId<WallpaperManager> wallpaper_manager_;
   ActorId<WebPagesManager> web_pages_manager_;
   ActorOwn<ConnectionCreator> connection_creator_;
   ActorOwn<TempAuthKeyWatchdog> temp_auth_key_watchdog_;
@@ -381,9 +403,20 @@ class Global : public ActorContext {
   int32 gc_scheduler_id_;
   int32 slow_net_scheduler_id_;
 
+  std::atomic<bool> store_all_files_in_files_directory_{false};
+
   std::atomic<double> server_time_difference_{0.0};
   std::atomic<bool> server_time_difference_was_updated_{false};
+  std::atomic<double> dns_time_difference_{0.0};
+  std::atomic<bool> dns_time_difference_was_updated_{false};
   std::atomic<bool> close_flag_{false};
+  std::atomic<double> system_time_saved_at_{-1e10};
+  double saved_diff_ = 0.0;
+  double saved_system_time_ = 0.0;
+
+#if !TD_HAVE_ATOMIC_SHARED_PTR
+  std::mutex dh_config_mutex_;
+#endif
 
   std::vector<std::shared_ptr<NetStatsCallback>> net_stats_file_callbacks_;
 
@@ -400,12 +433,22 @@ class Global : public ActorContext {
 
   std::unordered_map<int64, int64> location_access_hashes_;
 
+  int32 to_unix_time(double server_time) const;
+
+  void do_save_server_time_difference();
+
   void do_close(Promise<> on_finish, bool destroy_flag);
 };
 
-inline Global *G() {
-  CHECK(Scheduler::context());
-  return static_cast<Global *>(Scheduler::context());
+#define G() G_impl(__FILE__, __LINE__)
+
+inline Global *G_impl(const char *file, int line) {
+  ActorContext *context = Scheduler::context();
+  CHECK(context);
+  LOG_CHECK(context->get_id() == Global::ID) << "In " << file << " at " << line;
+  return static_cast<Global *>(context);
 }
+
+double get_server_time();
 
 }  // namespace td

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -11,6 +11,7 @@
 #include "td/utils/port/wstring_convert.h"
 #endif
 
+#include "td/utils/common.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
 #include "td/utils/port/detail/PollableFd.h"
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 
 #if TD_PORT_POSIX
 #include <fcntl.h>
@@ -29,6 +31,10 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#endif
+
+#if TD_PORT_WINDOWS && defined(WIN32_LEAN_AND_MEAN)
+#include <winioctl.h>
 #endif
 
 namespace td {
@@ -41,8 +47,8 @@ struct PrintFlags {
 
 StringBuilder &operator<<(StringBuilder &sb, const PrintFlags &print_flags) {
   auto flags = print_flags.flags;
-  if (flags &
-      ~(FileFd::Write | FileFd::Read | FileFd::Truncate | FileFd::Create | FileFd::Append | FileFd::CreateNew)) {
+  if (flags & ~(FileFd::Write | FileFd::Read | FileFd::Truncate | FileFd::Create | FileFd::Append | FileFd::CreateNew |
+                FileFd::Direct | FileFd::WinStat)) {
     return sb << "opened with invalid flags " << flags;
   }
 
@@ -75,6 +81,12 @@ StringBuilder &operator<<(StringBuilder &sb, const PrintFlags &print_flags) {
   if (flags & FileFd::Truncate) {
     sb << " with truncation";
   }
+  if (flags & FileFd::Direct) {
+    sb << " for direct io";
+  }
+  if (flags & FileFd::WinStat) {
+    sb << " for stat";
+  }
   return sb;
 }
 
@@ -96,7 +108,7 @@ FileFd::FileFd(unique_ptr<detail::FileFdImpl> impl) : impl_(std::move(impl)) {
 }
 
 Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
-  if (flags & ~(Write | Read | Truncate | Create | Append | CreateNew)) {
+  if (flags & ~(Write | Read | Truncate | Create | Append | CreateNew | Direct | WinStat)) {
     return Status::Error(PSLICE() << "File \"" << filepath << "\" has failed to be " << PrintFlags{flags});
   }
 
@@ -130,6 +142,12 @@ Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
   if (flags & Append) {
     native_flags |= O_APPEND;
   }
+
+#if TD_LINUX
+  if (flags & Direct) {
+    native_flags |= O_DIRECT;
+  }
+#endif
 
   int native_fd = detail::skip_eintr([&] { return ::open(filepath.c_str(), native_flags, static_cast<mode_t>(mode)); });
   if (native_fd < 0) {
@@ -173,14 +191,33 @@ Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
     }
   }
 
+  DWORD native_flags = 0;
+  if (flags & Direct) {
+    native_flags |= FILE_FLAG_WRITE_THROUGH | FILE_FLAG_NO_BUFFERING;
+  }
+  if (flags & WinStat) {
+    native_flags |= FILE_FLAG_BACKUP_SEMANTICS;
+  }
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_SYSTEM)
-  auto handle = CreateFile(w_filepath.c_str(), desired_access, share_mode, nullptr, creation_disposition, 0, nullptr);
+  auto handle =
+      CreateFile(w_filepath.c_str(), desired_access, share_mode, nullptr, creation_disposition, native_flags, nullptr);
 #else
-  auto handle = CreateFile2(w_filepath.c_str(), desired_access, share_mode, creation_disposition, nullptr);
+  CREATEFILE2_EXTENDED_PARAMETERS extended_parameters;
+  std::memset(&extended_parameters, 0, sizeof(extended_parameters));
+  extended_parameters.dwSize = sizeof(extended_parameters);
+  extended_parameters.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+  extended_parameters.dwFileFlags = native_flags;
+  auto handle = CreateFile2(w_filepath.c_str(), desired_access, share_mode, creation_disposition, &extended_parameters);
 #endif
   if (handle == INVALID_HANDLE_VALUE) {
     return OS_ERROR(PSLICE() << "File \"" << filepath << "\" can't be " << PrintFlags{flags});
   }
+#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_SYSTEM)
+  if (flags & Write) {
+    DWORD bytes_returned = 0;
+    DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &bytes_returned, nullptr);
+  }
+#endif
   auto native_fd = NativeFd(handle);
   if (flags & Append) {
     LARGE_INTEGER offset;
@@ -214,6 +251,26 @@ Result<size_t> FileFd::write(Slice slice) {
     return narrow_cast<size_t>(bytes_written);
   }
   return OS_ERROR(PSLICE() << "Write to " << get_native_fd() << " has failed");
+}
+
+Result<size_t> FileFd::writev(Span<IoSlice> slices) {
+#if TD_PORT_POSIX
+  auto native_fd = get_native_fd().fd();
+  TRY_RESULT(slices_size, narrow_cast_safe<int>(slices.size()));
+  auto bytes_written = detail::skip_eintr([&] { return ::writev(native_fd, slices.begin(), slices_size); });
+  bool success = bytes_written >= 0;
+  if (success) {
+    return narrow_cast<size_t>(bytes_written);
+  }
+  return OS_ERROR(PSLICE() << "Writev to " << get_native_fd() << " has failed");
+#else
+  size_t res = 0;
+  for (auto slice : slices) {
+    TRY_RESULT(size, write(slice));
+    res += size;
+  }
+  return res;
+#endif
 }
 
 Result<size_t> FileFd::read(MutableSlice slice) {
@@ -424,18 +481,59 @@ NativeFd FileFd::move_as_native_fd() {
   return res;
 }
 
-int64 FileFd::get_size() {
-  return stat().size_;
-}
-
 #if TD_PORT_WINDOWS
-static uint64 filetime_to_unix_time_nsec(LONGLONG filetime) {
+namespace {
+
+uint64 filetime_to_unix_time_nsec(LONGLONG filetime) {
   const auto FILETIME_UNIX_TIME_DIFF = 116444736000000000ll;
   return static_cast<uint64>((filetime - FILETIME_UNIX_TIME_DIFF) * 100);
 }
+
+struct FileSize {
+  int64 size_;
+  int64 real_size_;
+};
+
+Result<FileSize> get_file_size(const FileFd &file_fd) {
+  FILE_STANDARD_INFO standard_info;
+  if (!GetFileInformationByHandleEx(file_fd.get_native_fd().fd(), FileStandardInfo, &standard_info,
+                                    sizeof(standard_info))) {
+    return OS_ERROR("Get FileStandardInfo failed");
+  }
+  FileSize res;
+  res.size_ = standard_info.EndOfFile.QuadPart;
+  res.real_size_ = standard_info.AllocationSize.QuadPart;
+
+  if (res.size_ > 0 && res.real_size_ <= 0) {  // just in case
+    LOG(ERROR) << "Fix real file size from " << res.real_size_ << " to " << res.size_;
+    res.real_size_ = res.size_;
+  }
+
+  return res;
+}
+
+}  // namespace
 #endif
 
-Stat FileFd::stat() {
+Result<int64> FileFd::get_size() const {
+#if TD_PORT_POSIX
+  TRY_RESULT(s, stat());
+#elif TD_PORT_WINDOWS
+  TRY_RESULT(s, get_file_size(*this));
+#endif
+  return s.size_;
+}
+
+Result<int64> FileFd::get_real_size() const {
+#if TD_PORT_POSIX
+  TRY_RESULT(s, stat());
+#elif TD_PORT_WINDOWS
+  TRY_RESULT(s, get_file_size(*this));
+#endif
+  return s.real_size_;
+}
+
+Result<Stat> FileFd::stat() const {
   CHECK(!empty());
 #if TD_PORT_POSIX
   return detail::fstat(get_native_fd().fd());
@@ -445,21 +543,16 @@ Stat FileFd::stat() {
   FILE_BASIC_INFO basic_info;
   auto status = GetFileInformationByHandleEx(get_native_fd().fd(), FileBasicInfo, &basic_info, sizeof(basic_info));
   if (!status) {
-    auto error = OS_ERROR("Stat failed");
-    LOG(FATAL) << error;
+    return OS_ERROR("Get FileBasicInfo failed");
   }
   res.atime_nsec_ = filetime_to_unix_time_nsec(basic_info.LastAccessTime.QuadPart);
   res.mtime_nsec_ = filetime_to_unix_time_nsec(basic_info.LastWriteTime.QuadPart);
   res.is_dir_ = (basic_info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-  res.is_reg_ = true;
+  res.is_reg_ = !res.is_dir_;  // TODO this is still wrong
 
-  FILE_STANDARD_INFO standard_info;
-  status = GetFileInformationByHandleEx(get_native_fd().fd(), FileStandardInfo, &standard_info, sizeof(standard_info));
-  if (!status) {
-    auto error = OS_ERROR("Stat failed");
-    LOG(FATAL) << error;
-  }
-  res.size_ = standard_info.EndOfFile.QuadPart;
+  TRY_RESULT(file_size, get_file_size(*this));
+  res.size_ = file_size.size_;
+  res.real_size_ = file_size.real_size_;
 
   return res;
 #endif
@@ -469,9 +562,9 @@ Status FileFd::sync() {
   CHECK(!empty());
 #if TD_PORT_POSIX
 #if TD_DARWIN
-  if (fcntl(get_native_fd().fd(), F_FULLFSYNC) == -1) {
+  if (detail::skip_eintr([&] { return fcntl(get_native_fd().fd(), F_FULLFSYNC); }) == -1) {
 #else
-  if (fsync(get_native_fd().fd()) != 0) {
+  if (detail::skip_eintr([&] { return fsync(get_native_fd().fd()); }) != 0) {
 #endif
 #elif TD_PORT_WINDOWS
   if (FlushFileBuffers(get_native_fd().fd()) == 0) {

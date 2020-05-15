@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -42,6 +42,8 @@ class LanguagePackManager : public NetQueryCallback {
   static bool check_language_code_name(Slice name);
 
   static bool is_custom_language_code(Slice language_code);
+
+  vector<string> get_used_language_codes();
 
   void on_language_pack_changed();
 
@@ -150,6 +152,8 @@ class LanguagePackManager : public NetQueryCallback {
       tl_object_ptr<td_api::languagePackString> &&str);
 
   void inc_generation();
+
+  void repair_chosen_language_info();
 
   static bool is_valid_key(Slice key);
 

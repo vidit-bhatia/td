@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -43,9 +43,10 @@ class SessionCallback : public Session::Callback {
   void on_closed() override {
     send_closure(parent_, &SessionProxy::on_closed);
   }
-  void request_raw_connection(Promise<unique_ptr<mtproto::RawConnection>> promise) override {
+  void request_raw_connection(unique_ptr<mtproto::AuthData> auth_data,
+                              Promise<unique_ptr<mtproto::RawConnection>> promise) override {
     send_closure(G()->connection_creator(), &ConnectionCreator::request_raw_connection, dc_id_, allow_media_only_,
-                 is_media_, std::move(promise), hash_);
+                 is_media_, std::move(promise), hash_, std::move(auth_data));
   }
 
   void on_tmp_auth_key_updated(mtproto::AuthKey auth_key) override {
@@ -94,14 +95,14 @@ void SessionProxy::start_up() {
       if (!session_proxy_.is_alive()) {
         return false;
       }
-      send_closure(session_proxy_, &SessionProxy::update_auth_state);
+      send_closure(session_proxy_, &SessionProxy::update_auth_key_state);
       return true;
     }
 
    private:
     ActorShared<SessionProxy> session_proxy_;
   };
-  auth_state_ = auth_data_->get_auth_state().first;
+  auth_key_state_ = auth_data_->get_auth_key_state().first;
   auth_data_->add_auth_key_listener(make_unique<Listener>(actor_shared(this)));
   open_session();
 }
@@ -116,7 +117,7 @@ void SessionProxy::tear_down() {
 }
 
 void SessionProxy::send(NetQueryPtr query) {
-  if (query->auth_flag() == NetQuery::AuthFlag::On && auth_state_ != AuthState::OK) {
+  if (query->auth_flag() == NetQuery::AuthFlag::On && auth_key_state_ != AuthKeyState::OK) {
     query->debug(PSTRING() << get_name() << ": wait for auth");
     pending_queries_.emplace_back(std::move(query));
     return;
@@ -170,14 +171,14 @@ void SessionProxy::open_session(bool force) {
   // 1. All unauthorized query will be sent into the same SessionProxy
   // 2. All authorized query are delayed before we have authorization
   // So only one SessionProxy will be active before we have authorization key
-  auto should_open = [&]() {
+  auto should_open = [&] {
     if (force) {
       return true;
     }
     if (need_destroy_) {
-      return auth_state_ != AuthState::Empty;
+      return auth_key_state_ != AuthKeyState::Empty;
     }
-    if (auth_state_ != AuthState::OK) {
+    if (auth_key_state_ != AuthKeyState::OK) {
       return false;
     }
     return is_main_ || !pending_queries_.empty();
@@ -191,7 +192,8 @@ void SessionProxy::open_session(bool force) {
   string name = PSTRING() << "Session" << get_name().substr(Slice("SessionProxy").size());
   string hash_string = PSTRING() << name << " " << dc_id.get_raw_id() << " " << allow_media_only_;
   auto hash = std::hash<std::string>()(hash_string);
-  int32 int_dc_id = dc_id.get_raw_id();
+  int32 raw_dc_id = dc_id.get_raw_id();
+  int32 int_dc_id = raw_dc_id;
   if (G()->is_test_dc()) {
     int_dc_id += 10000;
   }
@@ -201,17 +203,17 @@ void SessionProxy::open_session(bool force) {
   session_ = create_actor<Session>(
       name,
       make_unique<SessionCallback>(actor_shared(this, session_generation_), dc_id, allow_media_only_, is_media_, hash),
-      auth_data_, int_dc_id, is_main_, use_pfs_, is_cdn_, need_destroy_, tmp_auth_key_, server_salts_);
+      auth_data_, raw_dc_id, int_dc_id, is_main_, use_pfs_, is_cdn_, need_destroy_, tmp_auth_key_, server_salts_);
 }
 
-void SessionProxy::update_auth_state() {
-  auto old_auth_state = auth_state_;
-  auth_state_ = auth_data_->get_auth_state().first;
-  if (auth_state_ != old_auth_state && old_auth_state == AuthState::OK) {
+void SessionProxy::update_auth_key_state() {
+  auto old_auth_key_state = auth_key_state_;
+  auth_key_state_ = auth_data_->get_auth_key_state().first;
+  if (auth_key_state_ != old_auth_key_state && old_auth_key_state == AuthKeyState::OK) {
     close_session();
   }
   open_session();
-  if (session_.empty() || auth_state_ != AuthState::OK) {
+  if (session_.empty() || auth_key_state_ != AuthKeyState::OK) {
     return;
   }
   for (auto &query : pending_queries_) {

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -18,7 +18,6 @@
 
 #include "td/telegram/telegram_api.h"
 
-#include "td/utils/format.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
 
@@ -34,8 +33,9 @@ DcAuthManager::DcAuthManager(ActorShared<> parent) {
     auto main_dc_id = to_integer<int32>(s_main_dc_id);
     if (DcId::is_valid(main_dc_id)) {
       main_dc_id_ = DcId::internal(main_dc_id);
+      VLOG(dc) << "Init main DcId to " << main_dc_id_;
     } else {
-      LOG(ERROR) << "Receive invalid main dc id " << main_dc_id;
+      LOG(ERROR) << "Receive invalid main DcId " << main_dc_id;
     }
   }
 }
@@ -50,7 +50,7 @@ void DcAuthManager::add_dc(std::shared_ptr<AuthDataShared> auth_data) {
       if (!dc_manager_.is_alive()) {
         return false;
       }
-      send_closure(dc_manager_, &DcAuthManager::update_auth_state);
+      send_closure(dc_manager_, &DcAuthManager::update_auth_key_state);
       return true;
     }
 
@@ -62,11 +62,14 @@ void DcAuthManager::add_dc(std::shared_ptr<AuthDataShared> auth_data) {
   info.dc_id = auth_data->dc_id();
   CHECK(info.dc_id.is_exact());
   info.shared_auth_data = std::move(auth_data);
-  auto state_was_auth = info.shared_auth_data->get_auth_state();
-  info.auth_state = state_was_auth.first;
+  auto state_was_auth = info.shared_auth_data->get_auth_key_state();
+  info.auth_key_state = state_was_auth.first;
+  VLOG(dc) << "Add " << info.dc_id << " with auth key state " << info.auth_key_state
+           << " and was_auth = " << state_was_auth.second;
   was_auth_ |= state_was_auth.second;
   if (!main_dc_id_.is_exact()) {
     main_dc_id_ = info.dc_id;
+    VLOG(dc) << "Set main DcId to " << main_dc_id_;
   }
   info.shared_auth_data->add_auth_key_listener(make_unique<Listener>(actor_shared(this, info.dc_id.get_raw_id())));
   dcs_.emplace_back(std::move(info));
@@ -75,6 +78,7 @@ void DcAuthManager::add_dc(std::shared_ptr<AuthDataShared> auth_data) {
 
 void DcAuthManager::update_main_dc(DcId new_main_dc_id) {
   main_dc_id_ = new_main_dc_id;
+  VLOG(dc) << "Update main DcId to " << main_dc_id_;
   loop();
 }
 
@@ -91,13 +95,13 @@ DcAuthManager::DcInfo *DcAuthManager::find_dc(int32 dc_id) {
   return &*it;
 }
 
-void DcAuthManager::update_auth_state() {
+void DcAuthManager::update_auth_key_state() {
   int32 dc_id = narrow_cast<int32>(get_link_token());
   auto &dc = get_dc(dc_id);
-  auto state_was_auth = dc.shared_auth_data->get_auth_state();
-  VLOG(dc) << "Update dc auth state " << tag("dc_id", dc_id) << tag("old_auth_state", dc.auth_state)
-           << tag("new_auth_state", state_was_auth.first);
-  dc.auth_state = state_was_auth.first;
+  auto state_was_auth = dc.shared_auth_data->get_auth_key_state();
+  VLOG(dc) << "Update " << dc_id << " auth key state from " << dc.auth_key_state << " to " << state_was_auth.first
+           << " with was_auth = " << state_was_auth.second;
+  dc.auth_key_state = state_was_auth.first;
   was_auth_ |= state_was_auth.second;
 
   loop();
@@ -149,9 +153,13 @@ void DcAuthManager::on_result(NetQueryPtr result) {
 }
 
 void DcAuthManager::dc_loop(DcInfo &dc) {
-  VLOG(dc) << "In dc_loop: " << dc.dc_id << " " << dc.auth_state;
-  if (dc.auth_state == AuthState::OK) {
+  VLOG(dc) << "In dc_loop: " << dc.dc_id << " " << dc.auth_key_state;
+  if (dc.auth_key_state == AuthKeyState::OK) {
     return;
+  }
+  if (dc.state == DcInfo::State::Ok) {
+    LOG(WARNING) << "Lost key in " << dc.dc_id << ", restart dc_loop";
+    dc.state = DcInfo::State::Waiting;
   }
   CHECK(dc.shared_auth_data);
   switch (dc.state) {
@@ -163,11 +171,10 @@ void DcAuthManager::dc_loop(DcInfo &dc) {
       // send auth.exportAuthorization to auth_dc
       VLOG(dc) << "Send exportAuthorization to " << dc.dc_id;
       auto id = UniqueId::next();
-      G()->net_query_dispatcher().dispatch_with_callback(
-          G()->net_query_creator().create(
-              id, create_storer(telegram_api::auth_exportAuthorization(dc.dc_id.get_raw_id())), DcId::main(),
-              NetQuery::Type::Common, NetQuery::AuthFlag::On, NetQuery::GzipFlag::On, 60 * 60 * 24),
-          actor_shared(this, dc.dc_id.get_raw_id()));
+      auto query = G()->net_query_creator().create(id, telegram_api::auth_exportAuthorization(dc.dc_id.get_raw_id()),
+                                                   DcId::main(), NetQuery::Type::Common, NetQuery::AuthFlag::On);
+      query->total_timeout_limit = 60 * 60 * 24;
+      G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this, dc.dc_id.get_raw_id()));
       dc.wait_id = id;
       dc.export_id = -1;
       dc.state = DcInfo::State::Import;
@@ -180,21 +187,19 @@ void DcAuthManager::dc_loop(DcInfo &dc) {
       }
       uint64 id = UniqueId::next();
       VLOG(dc) << "Send importAuthorization to " << dc.dc_id;
-      G()->net_query_dispatcher().dispatch_with_callback(
-          G()->net_query_creator().create(
-              id, create_storer(telegram_api::auth_importAuthorization(dc.export_id, std::move(dc.export_bytes))),
-              dc.dc_id, NetQuery::Type::Common, NetQuery::AuthFlag::Off, NetQuery::GzipFlag::On, 60 * 60 * 24),
-          actor_shared(this, dc.dc_id.get_raw_id()));
+      auto query = G()->net_query_creator().create(
+          id, telegram_api::auth_importAuthorization(dc.export_id, std::move(dc.export_bytes)), dc.dc_id,
+          NetQuery::Type::Common, NetQuery::AuthFlag::Off);
+      query->total_timeout_limit = 60 * 60 * 24;
+      G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this, dc.dc_id.get_raw_id()));
       dc.wait_id = id;
       dc.state = DcInfo::State::BeforeOk;
       break;
     }
-    case DcInfo::State::BeforeOk: {
+    case DcInfo::State::BeforeOk:
       break;
-    }
-    case DcInfo::State::Ok: {
+    case DcInfo::State::Ok:
       break;
-    }
   }
 }
 
@@ -209,14 +214,14 @@ void DcAuthManager::destroy_loop() {
   }
   bool is_ready{true};
   for (auto &dc : dcs_) {
-    is_ready &= dc.auth_state == AuthState::Empty;
+    is_ready &= dc.auth_key_state == AuthKeyState::Empty;
   }
 
   if (is_ready) {
-    LOG(INFO) << "Destroy auth keys loop is ready, all keys are destroyed";
+    VLOG(dc) << "Destroy auth keys loop is ready, all keys are destroyed";
     destroy_promise_.set_value(Unit());
   } else {
-    LOG(INFO) << "DC is not ready for destroying auth key";
+    VLOG(dc) << "DC is not ready for destroying auth key";
   }
 }
 
@@ -231,13 +236,15 @@ void DcAuthManager::loop() {
     return;
   }
   auto main_dc = find_dc(main_dc_id_.get_raw_id());
-  if (!main_dc || main_dc->auth_state != AuthState::OK) {
+  if (!main_dc || main_dc->auth_key_state != AuthKeyState::OK) {
+    VLOG(dc) << "Main is " << main_dc_id_ << ", main auth key state is "
+             << (main_dc ? main_dc->auth_key_state : AuthKeyState::Empty) << ", was_auth = " << was_auth_;
     if (was_auth_) {
       G()->shared_config().set_option_boolean("auth", false);
       destroy_loop();
     }
-    VLOG(dc) << "Skip loop because auth state of main dc " << main_dc_id_.get_raw_id() << " is "
-             << (main_dc != nullptr ? (PSTRING() << main_dc->auth_state) : "unknown");
+    VLOG(dc) << "Skip loop because auth state of main DcId " << main_dc_id_.get_raw_id() << " is "
+             << (main_dc != nullptr ? (PSTRING() << main_dc->auth_key_state) : "unknown");
 
     return;
   }
@@ -245,4 +252,5 @@ void DcAuthManager::loop() {
     dc_loop(dc);
   }
 }
+
 }  // namespace td

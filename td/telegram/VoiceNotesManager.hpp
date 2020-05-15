@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -33,6 +33,9 @@ FileId VoiceNotesManager::parse_voice_note(ParserT &parser) {
   parse(voice_note->duration, parser);
   parse(voice_note->waveform, parser);
   parse(voice_note->file_id, parser);
+  if (parser.get_error() != nullptr || !voice_note->file_id.is_valid()) {
+    return FileId();
+  }
   return on_get_voice_note(std::move(voice_note), false);
 }
 

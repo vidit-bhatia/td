@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -78,9 +78,9 @@ void ConcurrentScheduler::start() {
 #if !TD_THREAD_UNSUPPORTED && !TD_EVENTFD_UNSUPPORTED
   for (size_t i = 1; i + extra_scheduler_ < schedulers_.size(); i++) {
     auto &sched = schedulers_[i];
-    threads_.push_back(td::thread([&]() {
+    threads_.push_back(td::thread([&] {
 #if TD_PORT_WINDOWS
-      td::detail::Iocp::Guard iocp_guard(iocp_.get());
+      detail::Iocp::Guard iocp_guard(iocp_.get());
 #endif
       while (!is_finished()) {
         sched->run(Timestamp::in(10));
@@ -105,7 +105,7 @@ bool ConcurrentScheduler::run_main(Timestamp timeout) {
   auto &main_sched = schedulers_[0];
   if (!is_finished()) {
 #if TD_PORT_WINDOWS
-    td::detail::Iocp::Guard iocp_guard(iocp_.get());
+    detail::Iocp::Guard iocp_guard(iocp_.get());
 #endif
     main_sched->run(timeout);
   }
@@ -137,7 +137,7 @@ void ConcurrentScheduler::finish() {
   SCOPE_EXIT {
     iocp_->clear();
   };
-  td::detail::Iocp::Guard iocp_guard(iocp_.get());
+  detail::Iocp::Guard iocp_guard(iocp_.get());
 #endif
 
 #if !TD_THREAD_UNSUPPORTED && !TD_EVENTFD_UNSUPPORTED

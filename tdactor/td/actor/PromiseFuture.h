@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,14 +8,13 @@
 
 #include "td/actor/actor.h"
 
+#include "td/utils/CancellationToken.h"
 #include "td/utils/Closure.h"
 #include "td/utils/common.h"
 #include "td/utils/invoke.h"  // for tuple_for_each
 #include "td/utils/ScopeGuard.h"
 #include "td/utils/Status.h"
 
-#include <atomic>
-#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -63,10 +62,12 @@ class SafePromise;
 template <class T = Unit>
 class Promise {
  public:
+  bool was_set_value{false};
   void set_value(T &&value) {
     if (!promise_) {
       return;
     }
+    was_set_value = true;
     promise_->set_value(std::move(value));
     promise_.reset();
   }
@@ -74,6 +75,7 @@ class Promise {
     if (!promise_) {
       return;
     }
+    was_set_value = true;
     promise_->set_error(std::move(error));
     promise_.reset();
   }
@@ -81,6 +83,7 @@ class Promise {
     if (!promise_) {
       return;
     }
+    was_set_value = true;
     promise_->set_result(std::move(result));
     promise_.reset();
   }
@@ -170,42 +173,6 @@ Promise<T> &Promise<T>::operator=(SafePromise<T> &&other) {
   return *this;
 }
 
-class CancellationToken {
- public:
-  explicit CancellationToken(bool init = false) {
-    if (init) {
-      ptr_ = std::make_shared<std::atomic<bool>>(false);
-    }
-  }
-  CancellationToken(const CancellationToken &other) = default;
-  CancellationToken &operator=(const CancellationToken &other) {
-    cancel();
-    ptr_ = other.ptr_;
-    return *this;
-  }
-  CancellationToken(CancellationToken &&other) = default;
-  CancellationToken &operator=(CancellationToken &&other) {
-    cancel();
-    ptr_ = std::move(other.ptr_);
-    return *this;
-  }
-  ~CancellationToken() {
-    cancel();
-  }
-  bool is_canceled() const {
-    return !ptr_ || *ptr_;
-  }
-  void cancel() {
-    if (ptr_) {
-      ptr_->store(true, std::memory_order_relaxed);
-      ptr_.reset();
-    }
-  }
-
- private:
-  std::shared_ptr<std::atomic<bool>> ptr_;
-};
-
 namespace detail {
 
 class EventPromise : public PromiseInterface<Unit> {
@@ -287,7 +254,7 @@ class CancellablePromise : public PromiseT {
     return true;
   }
   virtual bool is_cancelled() const {
-    return cancellation_token_.is_canceled();
+    return static_cast<bool>(cancellation_token_);
   }
 
  private:
@@ -296,12 +263,12 @@ class CancellablePromise : public PromiseT {
 
 template <class ValueT, class FunctionOkT, class FunctionFailT>
 class LambdaPromise : public PromiseInterface<ValueT> {
-  enum OnFail { None, Ok, Fail };
+  enum class OnFail { None, Ok, Fail };
 
  public:
   void set_value(ValueT &&value) override {
     ok_(std::move(value));
-    on_fail_ = None;
+    on_fail_ = OnFail::None;
   }
   void set_error(Status &&error) override {
     do_error(std::move(error));
@@ -316,13 +283,15 @@ class LambdaPromise : public PromiseInterface<ValueT> {
 
   template <class FromOkT, class FromFailT>
   LambdaPromise(FromOkT &&ok, FromFailT &&fail, bool use_ok_as_fail)
-      : ok_(std::forward<FromOkT>(ok)), fail_(std::forward<FromFailT>(fail)), on_fail_(use_ok_as_fail ? Ok : Fail) {
+      : ok_(std::forward<FromOkT>(ok))
+      , fail_(std::forward<FromFailT>(fail))
+      , on_fail_(use_ok_as_fail ? OnFail::Ok : OnFail::Fail) {
   }
 
  private:
   FunctionOkT ok_;
   FunctionFailT fail_;
-  OnFail on_fail_ = None;
+  OnFail on_fail_ = OnFail::None;
 
   template <class FuncT, class ArgT = detail::get_arg_t<FuncT>>
   std::enable_if_t<std::is_assignable<ArgT, Status>::value> do_error_impl(FuncT &func, Status &&status) {
@@ -336,16 +305,16 @@ class LambdaPromise : public PromiseInterface<ValueT> {
 
   void do_error(Status &&error) {
     switch (on_fail_) {
-      case None:
+      case OnFail::None:
         break;
-      case Ok:
+      case OnFail::Ok:
         do_error_impl(ok_, std::move(error));
         break;
-      case Fail:
+      case OnFail::Fail:
         fail_(std::move(error));
         break;
     }
-    on_fail_ = None;
+    on_fail_ = OnFail::None;
   }
 };
 
@@ -439,9 +408,10 @@ class PromiseActor final : public PromiseInterface<T> {
 template <class T>
 class FutureActor final : public Actor {
   friend class PromiseActor<T>;
-  enum State { Waiting, Ready };
 
  public:
+  enum State { Waiting, Ready };
+
   static constexpr int Hangup = 426487;
 
   FutureActor() = default;
@@ -490,6 +460,10 @@ class FutureActor final : public Actor {
     if (state_ != State::Waiting) {
       event_.try_emit_later();
     }
+  }
+
+  State get_state() const {
+    return state_;
   }
 
   template <class S>

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -39,6 +39,13 @@ class DcId {
   }
   static DcId from_value(int32 value) {
     return DcId{value, false};
+  }
+  static DcId create(int32 dc_id_value) {
+    if (DcId::is_valid(dc_id_value)) {
+      return DcId(dc_id_value, false);
+    } else {
+      return DcId::invalid();
+    }
   }
 
   bool is_empty() const {
@@ -88,8 +95,12 @@ class DcId {
 
 inline StringBuilder &operator<<(StringBuilder &sb, const DcId &dc_id) {
   sb << "DcId{";
-  if (dc_id.is_empty()) {
+  if (dc_id == DcId::invalid()) {
+    sb << "invalid";
+  } else if (dc_id == DcId()) {
     sb << "empty";
+  } else if (dc_id.is_empty()) {
+    sb << "is_empty";
   } else if (dc_id.is_main()) {
     sb << "main";
   } else {

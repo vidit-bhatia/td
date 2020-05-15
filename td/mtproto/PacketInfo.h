@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -27,6 +27,8 @@ struct PacketInfo {
   bool no_crypto_flag;
   bool is_creator{false};
   bool check_mod4{true};
+  bool use_random_padding{false};
+  uint32 size{0};
 };
 
 }  // namespace mtproto

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -20,6 +20,7 @@
 #include "td/telegram/files/FileStats.h"
 #include "td/telegram/files/FileType.h"
 #include "td/telegram/Location.h"
+#include "td/telegram/PhotoSizeSource.h"
 
 #include "td/actor/actor.h"
 #include "td/actor/PromiseFuture.h"
@@ -32,10 +33,12 @@
 #include "td/utils/optional.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
+#include "td/utils/StringBuilder.h"
 
 #include <map>
 #include <memory>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -55,7 +58,7 @@ struct NewRemoteFileLocation {
   unique_ptr<PartialRemoteFileLocation> partial;
 
   //TODO: use RemoteId
-  // hardest part is to determine wether we should flush this location to db.
+  // hardest part is to determine whether we should flush this location to db.
   // probably, will need some generation in RemoteInfo
   optional<FullRemoteFileLocation> full;
   bool is_full_alive{false};  // if false, then we may try to upload this file
@@ -146,6 +149,8 @@ class FileNode {
 
   FileId main_file_id_;
 
+  double last_successful_force_reupload_time_ = -1e10;
+
   FileId upload_pause_;
   int8 upload_priority_ = 0;
   int8 download_priority_ = 0;
@@ -159,8 +164,9 @@ class FileNode {
   bool is_download_offset_dirty_ = false;
   bool is_download_limit_dirty_ = false;
 
-  bool get_by_hash_ = false;
+  bool get_by_hash_{false};
   bool can_search_locally_{true};
+  bool need_reload_photo_{false};
 
   bool is_download_started_ = false;
   bool generate_was_update_ = false;
@@ -212,7 +218,7 @@ class ConstFileNodePtr {
   }
 
   explicit operator bool() const {
-    return bool(file_node_ptr_);
+    return static_cast<bool>(file_node_ptr_);
   }
   const FullRemoteFileLocation *get_remote() const {
     return file_node_ptr_.get_remote();
@@ -236,6 +242,7 @@ class FileView {
   bool has_active_upload_remote_location() const;
   bool has_active_download_remote_location() const;
   const FullRemoteFileLocation &remote_location() const;
+  const FullRemoteFileLocation &main_remote_location() const;
   bool has_generate_location() const;
   const FullGenerateFileLocation &generate_location() const;
 
@@ -264,6 +271,8 @@ class FileView {
   bool is_uploading() const;
   int64 remote_size() const;
   string path() const;
+
+  int64 get_allocated_local_size() const;
 
   bool can_download_from_server() const;
   bool can_generate() const;
@@ -298,6 +307,19 @@ class FileView {
   }
   const FileEncryptionKey &encryption_key() const {
     return node_->encryption_key_;
+  }
+
+  bool may_reload_photo() const {
+    if (!has_remote_location()) {
+      return false;
+    }
+    if (!remote_location().is_photo()) {
+      return false;
+    }
+    auto type = remote_location().get_source().get_type();
+    return type == PhotoSizeSource::Type::DialogPhotoBig || type == PhotoSizeSource::Type::DialogPhotoSmall ||
+           type == PhotoSizeSource::Type::StickerSetThumbnail;
+    return false;
   }
 
  private:
@@ -340,13 +362,11 @@ class FileManager : public FileLoadManager::Callback {
 
   class Context {
    public:
-    virtual void on_new_file(int64 size, int32 cnt) = 0;
+    virtual void on_new_file(int64 size, int64 real_size, int32 cnt) = 0;
 
     virtual void on_file_updated(FileId size) = 0;
 
     virtual bool add_file_source(FileId file_id, FileSourceId file_source_id) = 0;
-
-    virtual FileSourceId get_wallpapers_file_source_id() = 0;
 
     virtual bool remove_file_source(FileId file_id, FileSourceId file_source_id) = 0;
 
@@ -355,6 +375,8 @@ class FileManager : public FileLoadManager::Callback {
     virtual vector<FileSourceId> get_some_file_sources(FileId file_id) = 0;
 
     virtual void repair_file_reference(FileId file_id, Promise<Unit> promise) = 0;
+
+    virtual void reload_photo(PhotoSizeSource source, Promise<Unit> promise) = 0;
 
     virtual ActorShared<> create_reference() = 0;
 
@@ -454,8 +476,9 @@ class FileManager : public FileLoadManager::Callback {
   FileId parse_file(ParserT &parser);
 
  private:
-  static constexpr char PERSISTENT_ID_VERSION = 2;
+  static constexpr char PERSISTENT_ID_VERSION_OLD = 2;
   static constexpr char PERSISTENT_ID_VERSION_MAP = 3;
+  static constexpr char PERSISTENT_ID_VERSION = 4;
 
   Result<FileId> check_input_file_id(FileType type, Result<FileId> result, bool is_encrypted, bool allow_zero,
                                      bool is_secure) TD_WARN_UNUSED_RESULT;
@@ -466,21 +489,27 @@ class FileManager : public FileLoadManager::Callback {
                                bool force);
 
   static constexpr int8 FROM_BYTES_PRIORITY = 10;
+
   using FileNodeId = int32;
+
   using QueryId = FileLoadManager::QueryId;
   class Query {
    public:
     FileId file_id_;
-    enum Type : int32 {
+    enum class Type : int32 {
       UploadByHash,
       UploadWaitFileReference,
       Upload,
-      DownloadWaitFileReferece,
+      DownloadWaitFileReference,
+      DownloadReloadDialog,
       Download,
       SetContent,
       Generate
     } type_;
   };
+
+  friend StringBuilder &operator<<(StringBuilder &string_builder, Query::Type type);
+
   struct FileIdInfo {
     FileNodeId node_id_{0};
     bool send_updates_flag_{false};
@@ -495,6 +524,8 @@ class FileManager : public FileLoadManager::Callback {
     std::shared_ptr<DownloadCallback> download_callback_;
     std::shared_ptr<UploadCallback> upload_callback_;
   };
+
+  class ForceUploadActor;
 
   ActorShared<> parent_;
   unique_ptr<Context> context_;
@@ -515,6 +546,8 @@ class FileManager : public FileLoadManager::Callback {
     }
   };
   Enumerator<RemoteInfo> remote_location_info_;
+
+  std::unordered_map<string, FileId> file_hash_to_file_id_;
 
   std::map<FullLocalFileLocation, FileId> local_location_to_file_id_;
   std::map<FullGenerateFileLocation, FileId> generate_location_to_file_id_;
@@ -547,6 +580,7 @@ class FileManager : public FileLoadManager::Callback {
   FileId register_pmc_file_data(FileData &&data);
 
   Status check_local_location(FileNodePtr node);
+  bool try_fix_partial_local_location(FileNodePtr node);
   Status check_local_location(FullLocalFileLocation &location, int64 &size);
   void try_flush_node_full(FileNodePtr node, bool new_remote, bool new_local, bool new_generate, FileDbId other_pmc_id);
   void try_flush_node(FileNodePtr node, const char *source);
@@ -556,11 +590,16 @@ class FileManager : public FileLoadManager::Callback {
   void flush_to_pmc(FileNodePtr node, bool new_remote, bool new_local, bool new_generate, const char *source);
   void load_from_pmc(FileNodePtr node, bool new_remote, bool new_local, bool new_generate);
 
+  string get_unique_id(const FullGenerateFileLocation &location);
+  string get_unique_id(const FullRemoteFileLocation &location);
+
   string get_persistent_id(const FullGenerateFileLocation &location);
   string get_persistent_id(const FullRemoteFileLocation &location);
 
   Result<FileId> from_persistent_id_map(Slice binary, FileType file_type);
   Result<FileId> from_persistent_id_v2(Slice binary, FileType file_type);
+  Result<FileId> from_persistent_id_v3(Slice binary, FileType file_type);
+  Result<FileId> from_persistent_id_v23(Slice binary, FileType file_type, int32 version);
 
   string fix_file_extension(Slice file_name, Slice file_type, Slice file_extension);
   string get_file_name(FileType file_type, Slice path);
@@ -574,6 +613,8 @@ class FileManager : public FileLoadManager::Callback {
   FileNode *get_file_node_raw(FileId file_id, FileNodeId *file_node_id = nullptr);
 
   FileNodePtr get_sync_file_node(FileId file_id);
+
+  void on_force_reupload_success(FileId file_id);
 
   // void release_file_node(FileNodeId id);
   void do_cancel_download(FileNodePtr node);

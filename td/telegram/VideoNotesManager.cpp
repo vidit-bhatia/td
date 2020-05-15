@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -39,12 +39,14 @@ tl_object_ptr<td_api::videoNote> VideoNotesManager::get_video_note_object(FileId
   video_note->is_changed = false;
 
   return make_tl_object<td_api::videoNote>(video_note->duration, video_note->dimensions.width,
+                                           get_minithumbnail_object(video_note->minithumbnail),
                                            get_photo_size_object(td_->file_manager_.get(), &video_note->thumbnail),
                                            td_->file_manager_->get_file_object(file_id));
 }
 
 FileId VideoNotesManager::on_get_video_note(unique_ptr<VideoNote> new_video_note, bool replace) {
   auto file_id = new_video_note->file_id;
+  CHECK(file_id.is_valid());
   LOG(INFO) << "Receive video note " << file_id;
   auto &v = video_notes_[file_id];
   if (v == nullptr) {
@@ -55,6 +57,10 @@ FileId VideoNotesManager::on_get_video_note(unique_ptr<VideoNote> new_video_note
       LOG(DEBUG) << "Video note " << file_id << " info has changed";
       v->duration = new_video_note->duration;
       v->dimensions = new_video_note->dimensions;
+      v->is_changed = true;
+    }
+    if (v->minithumbnail != new_video_note->minithumbnail) {
+      v->minithumbnail = std::move(new_video_note->minithumbnail);
       v->is_changed = true;
     }
     if (v->thumbnail != new_video_note->thumbnail) {
@@ -142,8 +148,8 @@ bool VideoNotesManager::merge_video_notes(FileId new_id, FileId old_id, bool can
   return true;
 }
 
-void VideoNotesManager::create_video_note(FileId file_id, PhotoSize thumbnail, int32 duration, Dimensions dimensions,
-                                          bool replace) {
+void VideoNotesManager::create_video_note(FileId file_id, string minithumbnail, PhotoSize thumbnail, int32 duration,
+                                          Dimensions dimensions, bool replace) {
   auto v = make_unique<VideoNote>();
   v->file_id = file_id;
   v->duration = max(duration, 0);
@@ -152,6 +158,7 @@ void VideoNotesManager::create_video_note(FileId file_id, PhotoSize thumbnail, i
   } else {
     LOG(INFO) << "Receive wrong video note dimensions " << dimensions;
   }
+  v->minithumbnail = std::move(minithumbnail);
   v->thumbnail = std::move(thumbnail);
   on_get_video_note(std::move(v), replace);
 }
@@ -167,7 +174,7 @@ SecretInputMedia VideoNotesManager::get_secret_input_media(FileId video_note_fil
     return SecretInputMedia{};
   }
   if (file_view.has_remote_location()) {
-    input_file = file_view.remote_location().as_input_encrypted_file();
+    input_file = file_view.main_remote_location().as_input_encrypted_file();
   }
   if (!input_file) {
     return SecretInputMedia{};
@@ -195,8 +202,8 @@ tl_object_ptr<telegram_api::InputMedia> VideoNotesManager::get_input_media(
   if (file_view.is_encrypted()) {
     return nullptr;
   }
-  if (file_view.has_remote_location() && !file_view.remote_location().is_web() && input_file == nullptr) {
-    return make_tl_object<telegram_api::inputMediaDocument>(0, file_view.remote_location().as_input_document(), 0);
+  if (file_view.has_remote_location() && !file_view.main_remote_location().is_web() && input_file == nullptr) {
+    return make_tl_object<telegram_api::inputMediaDocument>(0, file_view.main_remote_location().as_input_document(), 0);
   }
   if (file_view.has_url()) {
     return make_tl_object<telegram_api::inputMediaDocumentExternal>(0, file_view.url(), 0);

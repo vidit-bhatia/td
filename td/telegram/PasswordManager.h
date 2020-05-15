@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -79,12 +79,17 @@ class PasswordManager : public NetQueryCallback {
   void recover_password(string code, Promise<State> promise);
 
   void get_secure_secret(string password, Promise<secure_storage::Secret> promise);
+  void get_input_check_password_srp(string password,
+                                    Promise<tl_object_ptr<telegram_api::InputCheckPasswordSRP>> &&promise);
 
   void get_temp_password_state(Promise<TempState> promise) /*const*/;
   void create_temp_password(string password, int32 timeout, Promise<TempState> promise);
   void drop_temp_password();
+  void drop_cached_secret();
 
   static TempPasswordState get_temp_password_state_sync();
+
+  // void get_ton_wallet_password_salt(Promise<td_api::object_ptr<td_api::tonWalletPasswordSalt>> promise);
 
  private:
   static constexpr size_t MIN_NEW_SALT_SIZE = 8;
@@ -157,6 +162,9 @@ class PasswordManager : public NetQueryCallback {
 
   int32 last_code_length_ = 0;
 
+  // string ton_wallet_password_salt_;
+  // vector<Promise<td_api::object_ptr<td_api::tonWalletPasswordSalt>>> get_ton_wallet_password_salt_queries_;
+
   static Result<secure_storage::Secret> decrypt_secure_secret(
       Slice password, tl_object_ptr<telegram_api::SecurePasswordKdfAlgo> algo_ptr, Slice secret, int64 secret_id);
 
@@ -165,8 +173,8 @@ class PasswordManager : public NetQueryCallback {
   static Result<BufferSlice> calc_password_srp_hash(Slice password, Slice client_salt, Slice server_salt, int32 g,
                                                     Slice p);
 
-  tl_object_ptr<telegram_api::InputCheckPasswordSRP> get_input_check_password(Slice password,
-                                                                              const PasswordState &state) const;
+  static tl_object_ptr<telegram_api::InputCheckPasswordSRP> get_input_check_password(Slice password,
+                                                                                     const PasswordState &state);
 
   void update_password_settings(UpdateSettings update_settings, Promise<State> promise);
   void do_update_password_settings(UpdateSettings update_settings, PasswordFullState full_state, Promise<bool> promise);
@@ -178,11 +186,12 @@ class PasswordManager : public NetQueryCallback {
   void do_get_secure_secret(bool allow_recursive, string password, Promise<secure_storage::Secret> promise);
   void do_get_full_state(string password, PasswordState state, Promise<PasswordFullState> promise);
   void cache_secret(secure_storage::Secret secret);
-  void drop_cached_secret();
 
   void do_create_temp_password(string password, int32 timeout, PasswordState &&password_state,
                                Promise<TempPasswordState> promise);
   void on_finish_create_temp_password(Result<TempPasswordState> result, bool dummy);
+
+  // void on_get_ton_wallet_password_salt(Result<telegram_api::object_ptr<telegram_api::wallet_secretSalt>> result);
 
   void on_result(NetQueryPtr query) override;
 

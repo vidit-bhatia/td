@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,7 +7,6 @@
 #include "td/telegram/PhoneNumberManager.h"
 
 #include "td/telegram/Global.h"
-#include "td/telegram/net/DcId.h"
 #include "td/telegram/net/NetQueryDispatcher.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/td_api.h"
@@ -37,29 +36,21 @@ PhoneNumberManager::PhoneNumberManager(PhoneNumberManager::Type type, ActorShare
 }
 
 template <class T>
-void PhoneNumberManager::process_send_code_result(uint64 query_id, T r_send_code) {
-  if (r_send_code.is_error()) {
-    return on_query_error(query_id, r_send_code.move_as_error());
-  }
-
+void PhoneNumberManager::process_send_code_result(uint64 query_id, const T &send_code) {
   on_new_query(query_id);
-
-  start_net_query(NetQueryType::SendCode, G()->net_query_creator().create(create_storer(r_send_code.move_as_ok())));
+  start_net_query(NetQueryType::SendCode, G()->net_query_creator().create(send_code));
 }
 
-void PhoneNumberManager::set_phone_number(uint64 query_id, string phone_number, bool allow_flash_call,
-                                          bool is_current_phone_number) {
+void PhoneNumberManager::set_phone_number(uint64 query_id, string phone_number, Settings settings) {
   if (phone_number.empty()) {
     return on_query_error(query_id, Status::Error(8, "Phone number can't be empty"));
   }
 
   switch (type_) {
     case Type::ChangePhone:
-      return process_send_code_result(
-          query_id, send_code_helper_.send_change_phone_code(phone_number, allow_flash_call, is_current_phone_number));
+      return process_send_code_result(query_id, send_code_helper_.send_change_phone_code(phone_number, settings));
     case Type::VerifyPhone:
-      return process_send_code_result(
-          query_id, send_code_helper_.send_confirm_phone_code(phone_number, allow_flash_call, is_current_phone_number));
+      return process_send_code_result(query_id, send_code_helper_.send_verify_phone_code(phone_number, settings));
     case Type::ConfirmPhone:
     default:
       UNREACHABLE();
@@ -67,7 +58,7 @@ void PhoneNumberManager::set_phone_number(uint64 query_id, string phone_number, 
 }
 
 void PhoneNumberManager::set_phone_number_and_hash(uint64 query_id, string hash, string phone_number,
-                                                   bool allow_flash_call, bool is_current_phone_number) {
+                                                   Settings settings) {
   if (phone_number.empty()) {
     return on_query_error(query_id, Status::Error(8, "Phone number can't be empty"));
   }
@@ -77,8 +68,8 @@ void PhoneNumberManager::set_phone_number_and_hash(uint64 query_id, string hash,
 
   switch (type_) {
     case Type::ConfirmPhone:
-      return process_send_code_result(query_id, send_code_helper_.send_verify_phone_code(
-                                                    hash, phone_number, allow_flash_call, is_current_phone_number));
+      return process_send_code_result(query_id,
+                                      send_code_helper_.send_confirm_phone_code(hash, phone_number, settings));
     case Type::ChangePhone:
     case Type::VerifyPhone:
     default:
@@ -98,14 +89,12 @@ void PhoneNumberManager::resend_authentication_code(uint64 query_id) {
 
   on_new_query(query_id);
 
-  start_net_query(NetQueryType::SendCode,
-                  G()->net_query_creator().create(create_storer(r_resend_code.move_as_ok()), DcId::main(),
-                                                  NetQuery::Type::Common, NetQuery::AuthFlag::Off));
+  start_net_query(NetQueryType::SendCode, G()->net_query_creator().create_unauth(r_resend_code.move_as_ok()));
 }
 
 template <class T>
 void PhoneNumberManager::send_new_check_code_query(const T &query) {
-  start_net_query(NetQueryType::CheckCode, G()->net_query_creator().create(create_storer(query)));
+  start_net_query(NetQueryType::CheckCode, G()->net_query_creator().create(query));
 }
 
 void PhoneNumberManager::check_code(uint64 query_id, string code) {

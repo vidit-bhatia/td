@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -31,7 +31,15 @@ struct Document {
   }
 
   vector<FileId> get_file_ids(const Td *td) const;
+
+  void append_file_ids(const Td *td, vector<FileId> &file_ids) const;
 };
+
+bool operator==(const Document &lhs, const Document &rhs);
+
+bool operator!=(const Document &lhs, const Document &rhs);
+
+StringBuilder &operator<<(StringBuilder &string_builder, const Document::Type &document_type);
 
 StringBuilder &operator<<(StringBuilder &string_builder, const Document &document);
 

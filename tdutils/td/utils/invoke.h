@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -201,5 +201,10 @@ template <size_t N, class F, class... Args>
 auto call_n_arguments(F &&f, Args &&... args) {
   return detail::call_n_arguments_impl(detail::IntRange<N>(), f, std::forward<Args>(args)...);
 }
+
+template <class F, class X, class = void>
+struct is_callable : public std::false_type {};
+template <class F, class X>
+struct is_callable<F, X, decltype(std::declval<F>()(std::declval<X>()))> : public std::true_type {};
 
 }  // namespace td

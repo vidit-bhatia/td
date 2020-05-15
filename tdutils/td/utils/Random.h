@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -18,6 +18,8 @@ class Random {
   static void secure_bytes(unsigned char *ptr, size_t size);
   static int32 secure_int32();
   static int64 secure_int64();
+  static uint32 secure_uint32();
+  static uint64 secure_uint64();
 
   // works only for current thread
   static void add_seed(Slice bytes, double entropy = 0);

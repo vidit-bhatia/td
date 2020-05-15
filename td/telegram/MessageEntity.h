@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -19,7 +19,6 @@
 #include "td/telegram/td_api.h"
 #include "td/telegram/telegram_api.h"
 
-#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -28,8 +27,6 @@ namespace td {
 class ContactsManager;
 
 class MessageEntity {
-  tl_object_ptr<td_api::TextEntityType> get_text_entity_type_object() const;
-
  public:
   enum class Type : int32 {
     Mention,
@@ -45,7 +42,11 @@ class MessageEntity {
     TextUrl,
     MentionName,
     Cashtag,
-    PhoneNumber
+    PhoneNumber,
+    Underline,
+    Strikethrough,
+    BlockQuote,
+    BankCardNumber
   };
   Type type;
   int32 offset;
@@ -70,7 +71,15 @@ class MessageEntity {
   }
 
   bool operator<(const MessageEntity &other) const {
-    return std::tie(offset, length, type) < std::tie(other.offset, other.length, other.type);
+    if (offset != other.offset) {
+      return offset < other.offset;
+    }
+    if (length != other.length) {
+      return length > other.length;
+    }
+    auto priority = get_type_priority(type);
+    auto other_priority = get_type_priority(other.type);
+    return priority < other_priority;
   }
 
   bool operator!=(const MessageEntity &rhs) const {
@@ -82,7 +91,14 @@ class MessageEntity {
 
   template <class ParserT>
   void parse(ParserT &parser);
+
+ private:
+  tl_object_ptr<td_api::TextEntityType> get_text_entity_type_object() const;
+
+  static int get_type_priority(Type type);
 };
+
+StringBuilder &operator<<(StringBuilder &string_builder, const MessageEntity::Type &message_entity_type);
 
 StringBuilder &operator<<(StringBuilder &string_builder, const MessageEntity &message_entity);
 
@@ -97,6 +113,8 @@ struct FormattedText {
   void parse(ParserT &parser);
 };
 
+StringBuilder &operator<<(StringBuilder &string_builder, const FormattedText &text);
+
 inline bool operator==(const FormattedText &lhs, const FormattedText &rhs) {
   return lhs.text == rhs.text && lhs.entities == rhs.entities;
 }
@@ -108,7 +126,8 @@ inline bool operator!=(const FormattedText &lhs, const FormattedText &rhs) {
 const std::unordered_set<Slice, SliceHash> &get_valid_short_usernames();
 
 Result<vector<MessageEntity>> get_message_entities(const ContactsManager *contacts_manager,
-                                                   vector<tl_object_ptr<td_api::textEntity>> &&input_entities);
+                                                   vector<tl_object_ptr<td_api::textEntity>> &&input_entities,
+                                                   bool allow_all = false);
 
 vector<tl_object_ptr<td_api::textEntity>> get_text_entities_object(const vector<MessageEntity> &entities);
 
@@ -120,12 +139,19 @@ vector<Slice> find_mentions(Slice str);
 vector<Slice> find_bot_commands(Slice str);
 vector<Slice> find_hashtags(Slice str);
 vector<Slice> find_cashtags(Slice str);
+vector<Slice> find_bank_card_numbers(Slice str);
 bool is_email_address(Slice str);
 vector<std::pair<Slice, bool>> find_urls(Slice str);  // slice + is_email_address
 
 string get_first_url(Slice text, const vector<MessageEntity> &entities);
 
 Result<vector<MessageEntity>> parse_markdown(string &text);
+
+Result<vector<MessageEntity>> parse_markdown_v2(string &text);
+
+FormattedText parse_markdown_v3(FormattedText text);
+
+FormattedText get_markdown_v3(FormattedText text);
 
 Result<vector<MessageEntity>> parse_html(string &text);
 
@@ -138,7 +164,7 @@ vector<tl_object_ptr<telegram_api::MessageEntity>> get_input_message_entities(co
                                                                               const char *source);
 
 vector<tl_object_ptr<secret_api::MessageEntity>> get_input_secret_message_entities(
-    const vector<MessageEntity> &entities);
+    const vector<MessageEntity> &entities, int32 layer);
 
 vector<MessageEntity> get_message_entities(const ContactsManager *contacts_manager,
                                            vector<tl_object_ptr<telegram_api::MessageEntity>> &&server_entities,
@@ -152,7 +178,7 @@ Status fix_formatted_text(string &text, vector<MessageEntity> &entities, bool al
 
 FormattedText get_message_text(const ContactsManager *contacts_manager, string message_text,
                                vector<tl_object_ptr<telegram_api::MessageEntity>> &&server_entities,
-                               bool skip_new_entities, int32 send_date, const char *source);
+                               bool skip_new_entities, int32 send_date, bool from_album, const char *source);
 
 td_api::object_ptr<td_api::formattedText> extract_input_caption(
     tl_object_ptr<td_api::InputMessageContent> &input_message_content);

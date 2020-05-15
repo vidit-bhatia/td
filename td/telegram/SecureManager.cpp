@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -80,6 +80,7 @@ class SetSecureValue : public NetQueryCallback {
   optional<secure_storage::Secret> secret_;
 
   size_t files_left_to_upload_ = 0;
+  uint32 upload_generation_{0};
   vector<SecureInputFile> files_to_upload_;
   vector<SecureInputFile> translations_to_upload_;
   optional<SecureInputFile> front_side_;
@@ -93,18 +94,19 @@ class SetSecureValue : public NetQueryCallback {
 
   class UploadCallback : public FileManager::UploadCallback {
    public:
-    explicit UploadCallback(ActorId<SetSecureValue> actor_id);
+    UploadCallback(ActorId<SetSecureValue> actor_id, uint32 upload_generation);
 
    private:
     ActorId<SetSecureValue> actor_id_;
+    uint32 upload_generation_;
     void on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputFile> input_file) override;
     void on_upload_encrypted_ok(FileId file_id, tl_object_ptr<telegram_api::InputEncryptedFile> input_file) override;
     void on_upload_secure_ok(FileId file_id, tl_object_ptr<telegram_api::InputSecureFile> input_file) override;
     void on_upload_error(FileId file_id, Status status) override;
   };
 
-  void on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputSecureFile> input_file);
-  void on_upload_error(FileId file_id, Status status);
+  void on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputSecureFile> input_file, uint32 upload_generation);
+  void on_upload_error(FileId file_id, Status status, uint32 upload_generation);
 
   void on_error(Status error);
 
@@ -117,6 +119,9 @@ class SetSecureValue : public NetQueryCallback {
   void loop() override;
   void on_result(NetQueryPtr query) override;
 
+  void load_secret();
+  void cancel_upload();
+  void start_upload_all();
   void start_upload(FileManager *file_manager, FileId &file_id, SecureInputFile &info);
   void merge(FileManager *file_manager, FileId file_id, EncryptedSecureFile &encrypted_file);
 };
@@ -131,7 +136,7 @@ class SetSecureValueErrorsQuery : public Td::ResultHandler {
   void send(tl_object_ptr<telegram_api::InputUser> input_user,
             vector<tl_object_ptr<telegram_api::SecureValueError>> input_errors) {
     send_query(G()->net_query_creator().create(
-        create_storer(telegram_api::users_setSecureValueErrors(std::move(input_user), std::move(input_errors)))));
+        telegram_api::users_setSecureValueErrors(std::move(input_user), std::move(input_errors))));
   }
 
   void on_result(uint64 id, BufferSlice packet) override {
@@ -160,6 +165,9 @@ GetSecureValue::GetSecureValue(ActorShared<SecureManager> parent, std::string pa
 }
 
 void GetSecureValue::on_error(Status error) {
+  if (error.message() == "SECURE_SECRET_REQUIRED") {
+    send_closure(G()->password_manager(), &PasswordManager::drop_cached_secret);
+  }
   if (error.code() > 0) {
     promise_.set_error(std::move(error));
   } else {
@@ -170,7 +178,7 @@ void GetSecureValue::on_error(Status error) {
 
 void GetSecureValue::on_secret(Result<secure_storage::Secret> r_secret, bool dummy) {
   if (r_secret.is_error()) {
-    if (!G()->close_flag()) {
+    if (!G()->is_expected_error(r_secret.error())) {
       LOG(ERROR) << "Receive error instead of secret: " << r_secret.error();
     }
     return on_error(r_secret.move_as_error());
@@ -200,7 +208,7 @@ void GetSecureValue::start_up() {
   std::vector<telegram_api::object_ptr<telegram_api::SecureValueType>> types;
   types.push_back(get_input_secure_value_type(type_));
 
-  auto query = G()->net_query_creator().create(create_storer(telegram_api::account_getSecureValue(std::move(types))));
+  auto query = G()->net_query_creator().create(telegram_api::account_getSecureValue(std::move(types)));
 
   G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
 
@@ -236,6 +244,9 @@ GetAllSecureValues::GetAllSecureValues(ActorShared<SecureManager> parent, std::s
 }
 
 void GetAllSecureValues::on_error(Status error) {
+  if (error.message() == "SECURE_SECRET_REQUIRED") {
+    send_closure(G()->password_manager(), &PasswordManager::drop_cached_secret);
+  }
   if (error.code() > 0) {
     promise_.set_error(std::move(error));
   } else {
@@ -246,7 +257,7 @@ void GetAllSecureValues::on_error(Status error) {
 
 void GetAllSecureValues::on_secret(Result<secure_storage::Secret> r_secret, bool dummy) {
   if (r_secret.is_error()) {
-    if (!G()->close_flag()) {
+    if (!G()->is_expected_error(r_secret.error())) {
       LOG(ERROR) << "Receive error instead of secret: " << r_secret.error();
     }
     return on_error(r_secret.move_as_error());
@@ -277,7 +288,7 @@ void GetAllSecureValues::loop() {
 }
 
 void GetAllSecureValues::start_up() {
-  auto query = G()->net_query_creator().create(create_storer(telegram_api::account_getAllSecureValues()));
+  auto query = G()->net_query_creator().create(telegram_api::account_getAllSecureValues());
 
   G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
 
@@ -305,12 +316,13 @@ SetSecureValue::SetSecureValue(ActorShared<SecureManager> parent, string passwor
     , promise_(std::move(promise)) {
 }
 
-SetSecureValue::UploadCallback::UploadCallback(ActorId<SetSecureValue> actor_id) : actor_id_(actor_id) {
+SetSecureValue::UploadCallback::UploadCallback(ActorId<SetSecureValue> actor_id, uint32 upload_generation)
+    : actor_id_(actor_id), upload_generation_(upload_generation) {
 }
 
 void SetSecureValue::UploadCallback::on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputFile> input_file) {
   CHECK(input_file == nullptr);
-  send_closure_later(actor_id_, &SetSecureValue::on_upload_ok, file_id, nullptr);
+  send_closure_later(actor_id_, &SetSecureValue::on_upload_ok, file_id, nullptr, upload_generation_);
 }
 
 void SetSecureValue::UploadCallback::on_upload_encrypted_ok(
@@ -320,14 +332,18 @@ void SetSecureValue::UploadCallback::on_upload_encrypted_ok(
 
 void SetSecureValue::UploadCallback::on_upload_secure_ok(FileId file_id,
                                                          tl_object_ptr<telegram_api::InputSecureFile> input_file) {
-  send_closure_later(actor_id_, &SetSecureValue::on_upload_ok, file_id, std::move(input_file));
+  send_closure_later(actor_id_, &SetSecureValue::on_upload_ok, file_id, std::move(input_file), upload_generation_);
 }
 
 void SetSecureValue::UploadCallback::on_upload_error(FileId file_id, Status error) {
-  send_closure_later(actor_id_, &SetSecureValue::on_upload_error, file_id, std::move(error));
+  send_closure_later(actor_id_, &SetSecureValue::on_upload_error, file_id, std::move(error), upload_generation_);
 }
 
-void SetSecureValue::on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputSecureFile> input_file) {
+void SetSecureValue::on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::InputSecureFile> input_file,
+                                  uint32 upload_generation) {
+  if (upload_generation_ != upload_generation) {
+    return;
+  }
   SecureInputFile *info_ptr = nullptr;
   for (auto &info : files_to_upload_) {
     if (info.file_id == file_id) {
@@ -359,7 +375,10 @@ void SetSecureValue::on_upload_ok(FileId file_id, tl_object_ptr<telegram_api::In
   loop();
 }
 
-void SetSecureValue::on_upload_error(FileId file_id, Status error) {
+void SetSecureValue::on_upload_error(FileId file_id, Status error, uint32 upload_generation) {
+  if (upload_generation_ != upload_generation) {
+    return;
+  }
   on_error(std::move(error));
 }
 
@@ -374,7 +393,7 @@ void SetSecureValue::on_error(Status error) {
 
 void SetSecureValue::on_secret(Result<secure_storage::Secret> r_secret, bool x) {
   if (r_secret.is_error()) {
-    if (!G()->close_flag()) {
+    if (!G()->is_expected_error(r_secret.error())) {
       LOG(ERROR) << "Receive error instead of secret: " << r_secret.error();
     }
     return on_error(r_secret.move_as_error());
@@ -384,10 +403,7 @@ void SetSecureValue::on_secret(Result<secure_storage::Secret> r_secret, bool x) 
 }
 
 void SetSecureValue::start_up() {
-  send_closure(G()->password_manager(), &PasswordManager::get_secure_secret, password_,
-               PromiseCreator::lambda([actor_id = actor_id(this)](Result<secure_storage::Secret> r_secret) {
-                 send_closure(actor_id, &SetSecureValue::on_secret, std::move(r_secret), true);
-               }));
+  load_secret();
   auto *file_manager = G()->td().get_actor_unsafe()->file_manager_.get();
 
   // Remove duplicate files
@@ -460,8 +476,48 @@ void SetSecureValue::start_up() {
     }
   }
 
-  upload_callback_ = std::make_shared<UploadCallback>(actor_id(this));
+  start_upload_all();
+}
 
+void SetSecureValue::load_secret() {
+  secret_ = {};
+  send_closure(G()->password_manager(), &PasswordManager::get_secure_secret, password_,
+               PromiseCreator::lambda([actor_id = actor_id(this)](Result<secure_storage::Secret> r_secret) {
+                 send_closure(actor_id, &SetSecureValue::on_secret, std::move(r_secret), true);
+               }));
+}
+void SetSecureValue::cancel_upload() {
+  upload_generation_++;
+  auto *file_manager = G()->td().get_actor_unsafe()->file_manager_.get();
+  if (file_manager == nullptr) {
+    return;
+  }
+  for (auto &file_info : files_to_upload_) {
+    file_manager->cancel_upload(file_info.file_id);
+  }
+  for (auto &file_info : translations_to_upload_) {
+    file_manager->cancel_upload(file_info.file_id);
+  }
+  if (front_side_) {
+    file_manager->cancel_upload(front_side_.value().file_id);
+  }
+  if (reverse_side_) {
+    file_manager->cancel_upload(reverse_side_.value().file_id);
+  }
+  if (selfie_) {
+    file_manager->cancel_upload(selfie_.value().file_id);
+  }
+  files_left_to_upload_ = 0;
+}
+
+void SetSecureValue::start_upload_all() {
+  if (files_left_to_upload_ != 0) {
+    cancel_upload();
+  }
+  upload_generation_++;
+  upload_callback_ = std::make_shared<UploadCallback>(actor_id(this), upload_generation_);
+
+  auto *file_manager = G()->td().get_actor_unsafe()->file_manager_.get();
   files_to_upload_.resize(secure_value_.files.size());
   for (size_t i = 0; i < files_to_upload_.size(); i++) {
     start_upload(file_manager, secure_value_.files[i].file_id, files_to_upload_[i]);
@@ -483,16 +539,22 @@ void SetSecureValue::start_up() {
 
 void SetSecureValue::start_upload(FileManager *file_manager, FileId &file_id, SecureInputFile &info) {
   auto file_view = file_manager->get_file_view(file_id);
-  if (!file_view.is_encrypted_secure()) {
-    auto download_file_id = file_manager->dup_file_id(file_id);
-    file_id = file_manager
-                  ->register_generate(FileType::Secure, FileLocationSource::FromServer, file_view.suggested_name(),
-                                      PSTRING() << "#file_id#" << download_file_id.get(), DialogId(), file_view.size())
-                  .ok();
-  }
+  bool force = false;
+  if (info.file_id.empty()) {
+    if (!file_view.is_encrypted_secure()) {
+      auto download_file_id = file_manager->dup_file_id(file_id);
+      file_id =
+          file_manager
+              ->register_generate(FileType::Secure, FileLocationSource::FromServer, file_view.suggested_name(),
+                                  PSTRING() << "#file_id#" << download_file_id.get(), DialogId(), file_view.size())
+              .ok();
+    }
 
-  info.file_id = file_manager->dup_file_id(file_id);
-  file_manager->upload(info.file_id, upload_callback_, 1, 0);
+    info.file_id = file_manager->dup_file_id(file_id);
+  } else {
+    force = true;
+  }
+  file_manager->resume_upload(info.file_id, {}, upload_callback_, 1, 0, force);
   files_left_to_upload_++;
 }
 
@@ -510,7 +572,7 @@ void SetSecureValue::loop() {
                                       files_to_upload_, front_side_, reverse_side_, selfie_, translations_to_upload_);
     auto save_secure_value =
         telegram_api::account_saveSecureValue(std::move(input_secure_value), secret_.value().get_hash());
-    auto query = G()->net_query_creator().create(create_storer(save_secure_value));
+    auto query = G()->net_query_creator().create(save_secure_value);
 
     G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
     state_ = State::WaitSetValue;
@@ -522,30 +584,23 @@ void SetSecureValue::hangup() {
 }
 
 void SetSecureValue::tear_down() {
-  auto *file_manager = G()->td().get_actor_unsafe()->file_manager_.get();
-  if (file_manager == nullptr) {
-    return;
-  }
-  for (auto &file_info : files_to_upload_) {
-    file_manager->cancel_upload(file_info.file_id);
-  }
-  for (auto &file_info : translations_to_upload_) {
-    file_manager->cancel_upload(file_info.file_id);
-  }
-  if (front_side_) {
-    file_manager->cancel_upload(front_side_.value().file_id);
-  }
-  if (reverse_side_) {
-    file_manager->cancel_upload(reverse_side_.value().file_id);
-  }
-  if (selfie_) {
-    file_manager->cancel_upload(selfie_.value().file_id);
-  }
+  cancel_upload();
 }
 
 void SetSecureValue::on_result(NetQueryPtr query) {
   auto r_result = fetch_result<telegram_api::account_saveSecureValue>(std::move(query));
   if (r_result.is_error()) {
+    if (r_result.error().message() == "SECURE_SECRET_REQUIRED") {
+      state_ = State::WaitSecret;
+      send_closure(G()->password_manager(), &PasswordManager::drop_cached_secret);
+      load_secret();
+      return loop();
+    }
+    if (r_result.error().message() == "SECURE_SECRET_INVALID") {
+      state_ = State::WaitSecret;
+      start_upload_all();
+      return loop();
+    }
     return on_error(r_result.move_as_error());
   }
   auto result = r_result.move_as_ok();
@@ -609,8 +664,7 @@ class DeleteSecureValue : public NetQueryCallback {
   void start_up() override {
     std::vector<telegram_api::object_ptr<telegram_api::SecureValueType>> types;
     types.push_back(get_input_secure_value_type(type_));
-    auto query =
-        G()->net_query_creator().create(create_storer(telegram_api::account_deleteSecureValue(std::move(types))));
+    auto query = G()->net_query_creator().create(telegram_api::account_deleteSecureValue(std::move(types)));
     G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
   }
 
@@ -655,7 +709,7 @@ class GetPassportAuthorizationForm : public NetQueryCallback {
   void start_up() override {
     auto account_get_authorization_form =
         telegram_api::account_getAuthorizationForm(bot_user_id_.get(), std::move(scope_), std::move(public_key_));
-    auto query = G()->net_query_creator().create(create_storer(account_get_authorization_form));
+    auto query = G()->net_query_creator().create(account_get_authorization_form);
     G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
   }
 
@@ -709,7 +763,7 @@ class GetPassportConfig : public NetQueryCallback {
   Promise<td_api::object_ptr<td_api::text>> promise_;
 
   void start_up() override {
-    auto query = G()->net_query_creator().create(create_storer(telegram_api::help_getPassportConfig(0)));
+    auto query = G()->net_query_creator().create(telegram_api::help_getPassportConfig(0));
     G()->net_query_dispatcher().dispatch_with_callback(std::move(query), actor_shared(this));
   }
 
@@ -1007,7 +1061,7 @@ void SecureManager::on_get_passport_authorization_form_secret(int32 authorizatio
 
   if (r_secret.is_error()) {
     auto error = r_secret.move_as_error();
-    if (!G()->close_flag()) {
+    if (!G()->is_expected_error(error)) {
       LOG(ERROR) << "Receive error instead of secret: " << error;
     }
     if (error.code() <= 0) {
@@ -1214,7 +1268,7 @@ void SecureManager::send_passport_authorization_form(int32 authorization_form_id
   auto td_query = telegram_api::account_acceptAuthorization(
       it->second.bot_user_id.get(), it->second.scope, it->second.public_key, std::move(hashes),
       get_secure_credentials_encrypted_object(r_encrypted_credentials.move_as_ok()));
-  auto query = G()->net_query_creator().create(create_storer(td_query));
+  auto query = G()->net_query_creator().create(td_query);
   auto new_promise =
       PromiseCreator::lambda([promise = std::move(promise)](Result<NetQueryPtr> r_net_query_ptr) mutable {
         auto r_result = fetch_result<telegram_api::account_acceptAuthorization>(std::move(r_net_query_ptr));

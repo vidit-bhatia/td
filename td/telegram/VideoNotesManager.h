@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -30,7 +30,8 @@ class VideoNotesManager {
 
   tl_object_ptr<td_api::videoNote> get_video_note_object(FileId file_id);
 
-  void create_video_note(FileId file_id, PhotoSize thumbnail, int32 duration, Dimensions dimensions, bool replace);
+  void create_video_note(FileId file_id, string minithumbnail, PhotoSize thumbnail, int32 duration,
+                         Dimensions dimensions, bool replace);
 
   tl_object_ptr<telegram_api::InputMedia> get_input_media(FileId file_id,
                                                           tl_object_ptr<telegram_api::InputFile> input_file,
@@ -59,6 +60,7 @@ class VideoNotesManager {
    public:
     int32 duration = 0;
     Dimensions dimensions;
+    string minithumbnail;
     PhotoSize thumbnail;
 
     FileId file_id;

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -244,7 +244,7 @@ void Scheduler::clear() {
   if (callback_) {
     // can't move lambda with unique_ptr inside into std::function
     auto ptr = actor_info_pool_.release();
-    callback_->register_at_finish([=]() { delete ptr; });
+    callback_->register_at_finish([ptr] { delete ptr; });
   } else {
     actor_info_pool_.reset();
   }
@@ -369,6 +369,7 @@ void Scheduler::do_stop_actor(ActorInfo *actor_info) {
     event_context_ptr_->flags = 0;
   } else {
     owner_ptr = actor_info->get_actor_unsafe()->clear();
+    actor_info->destroy_actor();
   }
   destroy_actor(actor_info);
 }

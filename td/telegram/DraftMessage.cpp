@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,6 +8,7 @@
 
 #include "td/telegram/MessageEntity.h"
 #include "td/telegram/misc.h"
+#include "td/telegram/ServerMessageId.h"
 
 #include "td/utils/logging.h"
 
@@ -17,7 +18,7 @@ td_api::object_ptr<td_api::draftMessage> get_draft_message_object(const unique_p
   if (draft_message == nullptr) {
     return nullptr;
   }
-  return td_api::make_object<td_api::draftMessage>(draft_message->reply_to_message_id.get(),
+  return td_api::make_object<td_api::draftMessage>(draft_message->reply_to_message_id.get(), draft_message->date,
                                                    get_input_message_text_object(draft_message->input_message_text));
 }
 
@@ -50,7 +51,7 @@ unique_ptr<DraftMessage> get_draft_message(ContactsManager *contacts_manager,
         if (!clean_input_string(draft->message_)) {
           draft->message_.clear();
         }
-        entities.clear();
+        entities = find_entities(draft->message_, false);
       }
       result->input_message_text.text = FormattedText{std::move(draft->message_), std::move(entities)};
       result->input_message_text.disable_web_page_preview = (flags & telegram_api::draftMessage::NO_WEBPAGE_MASK) != 0;

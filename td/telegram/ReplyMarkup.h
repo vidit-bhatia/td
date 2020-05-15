@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,16 +17,25 @@ namespace td {
 
 struct KeyboardButton {
   // append only
-  enum class Type : int32 { Text, RequestPhoneNumber, RequestLocation };
+  enum class Type : int32 {
+    Text,
+    RequestPhoneNumber,
+    RequestLocation,
+    RequestPoll,
+    RequestPollQuiz,
+    RequestPollRegular
+  };
   Type type;
   string text;
 };
 
 struct InlineKeyboardButton {
   // append only
-  enum class Type : int32 { Url, Callback, CallbackGame, SwitchInline, SwitchInlineCurrentDialog, Buy };
+  enum class Type : int32 { Url, Callback, CallbackGame, SwitchInline, SwitchInlineCurrentDialog, Buy, UrlAuth };
   Type type;
+  int32 id = 0;  // UrlAuth only, button_id or (2 * request_write_access - 1) * bot_user_id
   string text;
+  string forward_text;  // UrlAuth only
   string data;
 };
 

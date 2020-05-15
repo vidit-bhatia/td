@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -68,6 +68,7 @@ class SessionConnection
   SessionConnection(Mode mode, unique_ptr<RawConnection> raw_connection, AuthData *auth_data);
 
   PollableFdInfo &get_poll_info();
+  unique_ptr<RawConnection> move_as_raw_connection();
 
   // Interface
   Result<uint64> TD_WARN_UNUSED_RESULT send_query(BufferSlice buffer, bool gzip_flag, int64 message_id = 0,
@@ -90,7 +91,6 @@ class SessionConnection
     virtual ~Callback() = default;
 
     virtual void on_connected() = 0;
-    virtual void on_before_close() = 0;
     virtual void on_closed(Status status) = 0;
 
     virtual void on_auth_key_updated() = 0;
@@ -202,7 +202,9 @@ class SessionConnection
   auto set_buffer_slice(BufferSlice *buffer_slice) TD_WARN_UNUSED_RESULT {
     auto old_buffer_slice = current_buffer_slice_;
     current_buffer_slice_ = buffer_slice;
-    return ScopeExit() + [&to = current_buffer_slice_, from = old_buffer_slice] { to = from; };
+    return ScopeExit() + [&to = current_buffer_slice_, from = old_buffer_slice] {
+      to = from;
+    };
   }
 
   Status parse_message(TlParser &parser, MsgInfo *info, Slice *packet, bool crypto_flag = true) TD_WARN_UNUSED_RESULT;

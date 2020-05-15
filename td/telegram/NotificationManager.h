@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,6 +9,7 @@
 #include "td/telegram/CallId.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/Document.h"
+#include "td/telegram/FullMessageId.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/Notification.h"
 #include "td/telegram/NotificationGroupId.h"
@@ -65,8 +66,9 @@ class NotificationManager : public Actor {
   void load_group_force(NotificationGroupId group_id);
 
   void add_notification(NotificationGroupId group_id, NotificationGroupType group_type, DialogId dialog_id, int32 date,
-                        DialogId notification_settings_dialog_id, bool is_silent, int32 min_delay_ms,
-                        NotificationId notification_id, unique_ptr<NotificationType> type, const char *source);
+                        DialogId notification_settings_dialog_id, bool initial_is_silent, bool is_silent,
+                        int32 min_delay_ms, NotificationId notification_id, unique_ptr<NotificationType> type,
+                        const char *source);
 
   void edit_notification(NotificationGroupId group_id, NotificationId notification_id,
                          unique_ptr<NotificationType> type);
@@ -154,6 +156,7 @@ class NotificationManager : public Actor {
   struct PendingNotification {
     int32 date = 0;
     DialogId settings_dialog_id;
+    bool initial_is_silent = false;
     bool is_silent = false;
     NotificationId notification_id;
     unique_ptr<NotificationType> type;
@@ -188,6 +191,14 @@ class NotificationManager : public Actor {
     }
   };
 
+  struct ActiveNotificationsUpdate {
+    const td_api::updateActiveNotifications *update;
+  };
+
+  struct NotificationUpdate {
+    const td_api::Update *update;
+  };
+
   enum class SyncState : int32 { NotSynced, Pending, Completed };
 
   using NotificationGroups = std::map<NotificationGroupKey, NotificationGroup>;
@@ -208,7 +219,8 @@ class NotificationManager : public Actor {
   void add_update_notification(NotificationGroupId notification_group_id, DialogId dialog_id,
                                const Notification &notification);
 
-  NotificationGroups::iterator add_group(NotificationGroupKey &&group_key, NotificationGroup &&group);
+  NotificationGroups::iterator add_group(NotificationGroupKey &&group_key, NotificationGroup &&group,
+                                         const char *source);
 
   NotificationGroups::iterator get_group(NotificationGroupId group_id);
 
@@ -295,9 +307,10 @@ class NotificationManager : public Actor {
   Status process_push_notification_payload(string payload, bool was_encrypted, Promise<Unit> &promise);
 
   void add_message_push_notification(DialogId dialog_id, MessageId message_id, int64 random_id, UserId sender_user_id,
-                                     string sender_name, int32 date, bool contains_mention, bool is_silent,
-                                     string loc_key, string arg, Photo photo, Document document,
-                                     NotificationId notification_id, uint64 logevent_id, Promise<Unit> promise);
+                                     string sender_name, int32 date, bool is_from_scheduled, bool contains_mention,
+                                     bool initial_is_silent, bool is_silent, string loc_key, string arg, Photo photo,
+                                     Document document, NotificationId notification_id, uint64 logevent_id,
+                                     Promise<Unit> promise);
 
   void edit_message_push_notification(DialogId dialog_id, MessageId message_id, int32 edit_date, string loc_key,
                                       string arg, Photo photo, Document document, uint64 logevent_id,
@@ -320,6 +333,14 @@ class NotificationManager : public Actor {
   void on_contact_registered_notifications_sync(bool is_disabled, Result<Unit> result);
 
   void save_announcement_ids();
+
+  static ActiveNotificationsUpdate as_active_notifications_update(const td_api::updateActiveNotifications *update);
+
+  static NotificationUpdate as_notification_update(const td_api::Update *update);
+
+  friend StringBuilder &operator<<(StringBuilder &string_builder, const ActiveNotificationsUpdate &update);
+
+  friend StringBuilder &operator<<(StringBuilder &string_builder, const NotificationUpdate &update);
 
   NotificationId current_notification_id_;
   NotificationGroupId current_notification_group_id_;
@@ -367,6 +388,8 @@ class NotificationManager : public Actor {
     NotificationGroupId group_id;
     NotificationId notification_id;
     UserId sender_user_id;
+    string sender_name;
+    bool is_outgoing;
   };
   std::unordered_map<FullMessageId, TemporaryNotification, FullMessageIdHash> temporary_notifications_;
   std::unordered_map<NotificationId, FullMessageId, NotificationIdHash> temporary_notification_message_ids_;

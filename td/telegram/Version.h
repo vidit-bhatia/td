@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,6 +7,8 @@
 #pragma once
 
 namespace td {
+
+constexpr int32 MTPROTO_LAYER = 113;
 
 enum class Version : int32 {
   Initial,
@@ -29,6 +31,12 @@ enum class Version : int32 {
   AddMessageUnsupportedVersion,
   SupportInstantView2_0,
   AddNotificationGroupInfoMaxRemovedMessageId,
+  SupportMinithumbnails,
+  AddVideoCallsSupport,
+  AddPhotoSizeSource,
+  AddFolders,
+  SupportPolls2_0,
+  AddDiceEmoji,
   Next
 };
 
@@ -40,6 +48,8 @@ enum class DbVersion : int32 {
   MessagesCallIndex,
   FixFileRemoteLocationKeyBug,
   AddNotificationsSupport,
+  AddFolders,
+  AddScheduledMessages,
   Next
 };
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -78,9 +78,11 @@ class DocumentsManager {
 
   Document on_get_document(RemoteDocument remote_document, DialogId owner_dialog_id,
                            MultiPromiseActor *load_data_multipromise_ptr = nullptr,
-                           Document::Type default_document_type = Document::Type::General);
+                           Document::Type default_document_type = Document::Type::General, bool is_background = false,
+                           bool is_pattern = false);
 
-  void create_document(FileId file_id, PhotoSize thumbnail, string file_name, string mime_type, bool replace);
+  void create_document(FileId file_id, string minithumbnail, PhotoSize thumbnail, string file_name, string mime_type,
+                       bool replace);
 
   bool has_input_media(FileId file_id, FileId thumbnail_file_id, bool is_secret) const;
 
@@ -113,6 +115,7 @@ class DocumentsManager {
    public:
     string file_name;
     string mime_type;
+    string minithumbnail;
     PhotoSize thumbnail;
     FileId file_id;
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -27,9 +27,7 @@ class NotificationType {
   NotificationType &operator=(const NotificationType &) = delete;
   NotificationType(NotificationType &&) = delete;
   NotificationType &operator=(NotificationType &&) = delete;
-
-  virtual ~NotificationType() {
-  }
+  virtual ~NotificationType() = default;
 
   virtual bool can_be_delayed() const = 0;
 
@@ -42,11 +40,6 @@ class NotificationType {
   virtual td_api::object_ptr<td_api::NotificationType> get_notification_type_object(DialogId dialog_id) const = 0;
 
   virtual StringBuilder &to_string_builder(StringBuilder &string_builder) const = 0;
-
- protected:
-  // enum class Type : int32 { Message, SecretChat, Call, PushMessage };
-
-  // virtual Type get_type() const = 0;
 };
 
 inline StringBuilder &operator<<(StringBuilder &string_builder, const NotificationType &notification_type) {
@@ -66,8 +59,8 @@ unique_ptr<NotificationType> create_new_secret_chat_notification();
 
 unique_ptr<NotificationType> create_new_call_notification(CallId call_id);
 
-unique_ptr<NotificationType> create_new_push_message_notification(UserId sender_user_id, MessageId message_id,
-                                                                  string key, string arg, Photo photo,
-                                                                  Document document);
+unique_ptr<NotificationType> create_new_push_message_notification(UserId sender_user_id, string sender_name,
+                                                                  bool is_outgoing, MessageId message_id, string key,
+                                                                  string arg, Photo photo, Document document);
 
 }  // namespace td

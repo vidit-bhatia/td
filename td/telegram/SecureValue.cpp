@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2019
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2020
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -796,7 +796,7 @@ static Result<td_api::object_ptr<td_api::personalDetails>> get_personal_details_
 
   auto value = r_value.move_as_ok();
   if (value.type() != JsonValue::Type::Object) {
-    return Status::Error(400, "Personal details should be an Object");
+    return Status::Error(400, "Personal details must be an Object");
   }
 
   auto &object = value.get_object();
@@ -888,23 +888,19 @@ static Result<SecureValue> get_identity_document(SecureValueType type, FileManag
     }
   } else {
     if (!need_reverse_side) {
-      return Status::Error(400, "Document shouldn't have a reverse side");
+      return Status::Error(400, "Document can't have a reverse side");
     }
   }
 
-  TRY_RESULT(front_side, get_secure_file(file_manager, std::move(identity_document->front_side_)));
-  res.front_side = std::move(front_side);
+  TRY_RESULT_ASSIGN(res.front_side, get_secure_file(file_manager, std::move(identity_document->front_side_)));
   if (identity_document->reverse_side_ != nullptr) {
-    TRY_RESULT(reverse_side, get_secure_file(file_manager, std::move(identity_document->reverse_side_)));
-    res.reverse_side = std::move(reverse_side);
+    TRY_RESULT_ASSIGN(res.reverse_side, get_secure_file(file_manager, std::move(identity_document->reverse_side_)));
   }
   if (identity_document->selfie_ != nullptr) {
-    TRY_RESULT(selfie, get_secure_file(file_manager, std::move(identity_document->selfie_)));
-    res.selfie = std::move(selfie);
+    TRY_RESULT_ASSIGN(res.selfie, get_secure_file(file_manager, std::move(identity_document->selfie_)));
   }
   if (!identity_document->translation_.empty()) {
-    TRY_RESULT(translations, get_secure_files(file_manager, std::move(identity_document->translation_)));
-    res.translations = std::move(translations);
+    TRY_RESULT_ASSIGN(res.translations, get_secure_files(file_manager, std::move(identity_document->translation_)));
   }
   return res;
 }
@@ -934,7 +930,7 @@ static Result<td_api::object_ptr<td_api::identityDocument>> get_identity_documen
 
   auto json_value = r_value.move_as_ok();
   if (json_value.type() != JsonValue::Type::Object) {
-    return Status::Error(400, "Identity document should be an Object");
+    return Status::Error(400, "Identity document must be an Object");
   }
 
   auto &object = json_value.get_object();
@@ -962,11 +958,9 @@ static Result<SecureValue> get_personal_document(
   if (personal_document->files_.empty()) {
     return Status::Error(400, "Document's files are required");
   }
-  TRY_RESULT(files, get_secure_files(file_manager, std::move(personal_document->files_)));
-  res.files = std::move(files);
+  TRY_RESULT_ASSIGN(res.files, get_secure_files(file_manager, std::move(personal_document->files_)));
   if (!personal_document->translation_.empty()) {
-    TRY_RESULT(translations, get_secure_files(file_manager, std::move(personal_document->translation_)));
-    res.translations = std::move(translations);
+    TRY_RESULT_ASSIGN(res.translations, get_secure_files(file_manager, std::move(personal_document->translation_)));
   }
   return res;
 }
@@ -1002,8 +996,7 @@ Result<SecureValue> get_secure_value(FileManager *file_manager,
     case td_api::inputPassportElementPersonalDetails::ID: {
       auto input = td_api::move_object_as<td_api::inputPassportElementPersonalDetails>(input_passport_element);
       res.type = SecureValueType::PersonalDetails;
-      TRY_RESULT(personal_details, get_personal_details(std::move(input->personal_details_)));
-      res.data = std::move(personal_details);
+      TRY_RESULT_ASSIGN(res.data, get_personal_details(std::move(input->personal_details_)));
       break;
     }
     case td_api::inputPassportElementPassport::ID: {
@@ -1367,26 +1360,22 @@ EncryptedSecureValue encrypt_secure_value(FileManager *file_manager, const secur
   return res;
 }
 
-static auto as_jsonable(const SecureDataCredentials &credentials) {
+static auto as_jsonable_data(const SecureDataCredentials &credentials) {
   return json_object([&credentials](auto &o) {
     o("data_hash", base64_encode(credentials.hash));
     o("secret", base64_encode(credentials.secret));
   });
 }
 
-static auto as_jsonable(const SecureFileCredentials &credentials) {
+static auto as_jsonable_file(const SecureFileCredentials &credentials) {
   return json_object([&credentials](auto &o) {
     o("file_hash", base64_encode(credentials.hash));
     o("secret", base64_encode(credentials.secret));
   });
 }
 
-static auto as_jsonable(const vector<SecureFileCredentials> &files) {
-  return json_array([&files](auto &arr) {
-    for (auto &file : files) {
-      arr(as_jsonable(file));
-    }
-  });
+static auto as_jsonable_files(const vector<SecureFileCredentials> &files) {
+  return json_array(files, as_jsonable_file);
 }
 
 static Slice secure_value_type_as_slice(SecureValueType type) {
@@ -1435,27 +1424,27 @@ static auto credentials_as_jsonable(const std::vector<SecureValueCredentials> &c
 
           o(secure_value_type_as_slice(cred.type), json_object([&cred](auto &o) {
               if (cred.data) {
-                o("data", as_jsonable(cred.data.value()));
+                o("data", as_jsonable_data(cred.data.value()));
               }
               if (!cred.files.empty()) {
-                o("files", as_jsonable(cred.files));
+                o("files", as_jsonable_files(cred.files));
               }
               if (cred.front_side) {
-                o("front_side", as_jsonable(cred.front_side.value()));
+                o("front_side", as_jsonable_file(cred.front_side.value()));
               }
               if (cred.reverse_side) {
-                o("reverse_side", as_jsonable(cred.reverse_side.value()));
+                o("reverse_side", as_jsonable_file(cred.reverse_side.value()));
               }
               if (cred.selfie) {
-                o("selfie", as_jsonable(cred.selfie.value()));
+                o("selfie", as_jsonable_file(cred.selfie.value()));
               }
               if (!cred.translations.empty()) {
-                o("translation", as_jsonable(cred.translations));
+                o("translation", as_jsonable_files(cred.translations));
               }
             }));
         }
       }));
-    o(rename_payload_to_nonce ? "nonce" : "payload", nonce);
+    o(rename_payload_to_nonce ? Slice("nonce") : Slice("payload"), nonce);
   });
 }
 
